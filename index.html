@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b3028">
+  <title>Player Registration | Sihimoge Premier League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="brand">
+      <img src="assets/spl-logo.jpg" alt="Sihimoge Premier League logo" class="logo">
+      <div>
+        <p class="eyebrow">PLAYER REGISTRATION</p>
+        <h1>Sihimoge Premier League</h1>
+        <p class="sub">Play Together • Smash Limits</p>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="form-title">
+      <div class="card-head">
+        <span class="pill">Registration</span>
+        <h2 id="form-title">Tell us about yourself</h2>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+      <form id="registrationForm" method="POST"
+            action="https://script.google.com/macros/s/AKfycbzYqk5QszKLfboZTs0FUqZHlzme5gCjwnMg53MFAETHo-7gOVN07_j-JZbcUQlK1q4-TQ/exec" novalidate>
+        <div class="profile-row">
+          <div class="photo-panel">
+            <div class="photo-box" id="photoBox">
+              <img id="photoPreview" alt="Profile preview">
+              <div class="photo-placeholder">Upload photo</div>
+              <div class="photo-toolbar" id="photoToolbar">
+                <button type="button" class="photo-tool photo-tool-crop" id="cropPhotoBtn" aria-label="Crop photo" title="Crop photo" disabled>
+                  ✏️
+                </button>
+                <button type="button" class="photo-tool photo-tool-remove" id="removePhotoBtn" aria-label="Remove photo" title="Remove photo">
+                  🗑
+                </button>
+              </div>
+            </div>
+            <div class="photo-actions">
+              <label class="upload-button">
+                <input id="photoInput" name="photo" type="file" accept="image/*" capture="user" required>
+                Choose Photo
+              </label>
+            </div>
+          </div>
+
+          <div class="grid" style="flex: 1; width: 100%;">
+            <label class="field field-full">
+              <span>Name <b>*</b></span>
+              <input name="name" type="text" autocomplete="name" placeholder="Enter your full name" required>
+            </label>
+
+            <label class="field">
+              <span>Age <b>*</b></span>
+              <input name="age" type="number" min="1" max="100" inputmode="numeric" placeholder="Age" required>
+            </label>
+
+            <label class="field">
+              <span>Date of Birth <b>*</b></span>
+              <input name="dob" type="date" required>
+            </label>
+
+            <label class="field field-full">
+              <span>Category <b>*</b></span>
+              <select name="category" required>
+                <option value="">Select your category</option>
+                <option>G/N Doubles 1</option>
+                <option>G/N Doubles 2</option>
+                <option>30+ Men's Doubles</option>
+                <option>40+ Men's Doubles</option>
+                <option>85+ Men's Jumble Doubles</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="grid">
+          <label class="field field-full">
+            <span>Mobile Number <b>*</b></span>
+            <input name="mobile" type="tel" inputmode="tel"
+                   placeholder="10-digit mobile number" required>
+          </label>
+
+          <label class="field field-full">
+            <span>Comments </span>
+            <textarea name="comment" rows="4" placeholder="Achievements / experience / notes"></textarea>
+          </label>
+
+          <label class="field field-full">
+            <span>Document (ID proof / image or PDF) <b>*</b></span>
+            <input name="document" type="file" accept="image/*,.pdf" required>
+          </label>
+        </div>
+
+        <p class="note">By submitting, you are providing these details to the tournament organizers for registration purposes.</p>
+        <button class="submit" type="submit">
+          <span>Submit Registration</span>
+          <span class="arrow">→</span>
+        </button>
+      </form>
+
+      <div class="crop-modal hidden" id="cropModal" aria-modal="true" role="dialog" aria-labelledby="cropTitle">
+        <div class="crop-dialog">
+          <div class="crop-header">
+            <h3 id="cropTitle">Crop display photo</h3>
+            <button type="button" class="close-crop" id="closeCropBtn" aria-label="Close crop dialog">×</button>
+          </div>
+
+          <div class="crop-stage" id="cropStage">
+            <img id="cropImage" alt="Crop preview">
+            <div class="crop-box" id="cropBox"></div>
+          </div>
+
+          <div class="crop-controls">
+            <label class="zoom-field">
+              <span>Zoom</span>
+              <input id="zoomRange" type="range" min="0.8" max="2" step="0.01" value="1">
+            </label>
+            <button type="button" class="primary-button" id="applyCropBtn">Use this photo</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-note">
+        <span>Registration page for the tournament</span>
+        <span>•</span>
+        <span>Shivamogga, Karnataka</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("registrationForm");
+    const statusBox = document.getElementById("status");
+    const submitButton = form.querySelector(".submit");
+    const photoInput = document.getElementById("photoInput");
+    const photoBox = document.getElementById("photoBox");
+    const photoPreview = document.getElementById("photoPreview");
+    const cropPhotoBtn = document.getElementById("cropPhotoBtn");
+    const removePhotoBtn = document.getElementById("removePhotoBtn");
+    const cropModal = document.getElementById("cropModal");
+    const cropStage = document.getElementById("cropStage");
+    const cropImage = document.getElementById("cropImage");
+    const cropBox = document.getElementById("cropBox");
+    const zoomRange = document.getElementById("zoomRange");
+    const applyCropBtn = document.getElementById("applyCropBtn");
+    const closeCropBtn = document.getElementById("closeCropBtn");
+
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("status");
+    let photoDataUrl = "";
+    let isCropOpen = false;
+
+    function showStatus(type, message) {
+      statusBox.hidden = false;
+      statusBox.className = "status " + type;
+      statusBox.textContent = message;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function setPhotoPreview(dataUrl) {
+      photoDataUrl = dataUrl;
+      photoPreview.src = dataUrl;
+      photoBox.classList.add("has-preview");
+      cropPhotoBtn.disabled = false;
+    }
+
+    function clearPhotoPreview() {
+      photoDataUrl = "";
+      photoPreview.removeAttribute("src");
+      photoBox.classList.remove("has-preview");
+      photoInput.value = "";
+      cropPhotoBtn.disabled = true;
+    }
+
+    function openCropDialog() {
+      if (!photoDataUrl) return;
+      cropImage.src = photoDataUrl;
+      cropModal.classList.remove("hidden");
+      isCropOpen = true;
+      document.body.style.overflow = "hidden";
+      zoomRange.value = 1;
+      cropImage.style.transform = "scale(1)";
+      resetCropBox();
+    }
+
+    function closeCropDialog() {
+      cropModal.classList.add("hidden");
+      isCropOpen = false;
+      document.body.style.overflow = "";
+    }
+
+    function resetCropBox() {
+      const boxSize = Math.min(cropStage.clientWidth, cropStage.clientHeight) * 0.78;
+      cropBox.style.width = boxSize + "px";
+      cropBox.style.height = boxSize + "px";
+      cropBox.style.left = "50%";
+      cropBox.style.top = "50%";
+      cropBox.style.transform = "translate(-50%, -50%)";
+    }
+
+    function dragCropBox(event) {
+      if (!isCropOpen) return;
+      const rect = cropStage.getBoundingClientRect();
+      const boxRect = cropBox.getBoundingClientRect();
+      const offsetX = event.clientX - rect.left;
+      const offsetY = event.clientY - rect.top;
+      const boxWidth = boxRect.width;
+      const boxHeight = boxRect.height;
+      let newLeft = offsetX - boxWidth / 2;
+      let newTop = offsetY - boxHeight / 2;
+      const maxLeft = rect.width - boxWidth;
+      const maxTop = rect.height - boxHeight;
+      newLeft = Math.min(Math.max(newLeft, 0), maxLeft);
+      newTop = Math.min(Math.max(newTop, 0), maxTop);
+      cropBox.style.left = newLeft + "px";
+      cropBox.style.top = newTop + "px";
+      cropBox.style.transform = "translate(0, 0)";
+    }
+
+    function handleZoomChange() {
+      const zoom = Number(zoomRange.value);
+      cropImage.style.transform = "scale(" + zoom + ")";
+    }
+
+    function readImageDataFromCrop() {
+      const image = cropImage;
+      const imageRect = image.getBoundingClientRect();
+      const boxRect = cropBox.getBoundingClientRect();
+      const cropX = Math.max(0, boxRect.left - imageRect.left);
+      const cropY = Math.max(0, boxRect.top - imageRect.top);
+      const cropW = Math.min(boxRect.width, imageRect.width);
+      const cropH = Math.min(boxRect.height, imageRect.height);
+
+      const canvas = document.createElement("canvas");
+      const sx = (cropX * image.naturalWidth) / imageRect.width;
+      const sy = (cropY * image.naturalHeight) / imageRect.height;
+      const sw = (cropW * image.naturalWidth) / imageRect.width;
+      const sh = (cropH * image.naturalHeight) / imageRect.height;
+      const squareSize = Math.min(sw, sh);
+
+      canvas.width = squareSize;
+      canvas.height = squareSize;
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, sx, sy, squareSize, squareSize, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", 0.9);
+    }
+
+    photoInput.addEventListener("change", async () => {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+
+      const dataUrl = await readFileAsDataUrl(file);
+      setPhotoPreview(dataUrl);
+      openCropDialog();
+    });
+
+    cropPhotoBtn.addEventListener("click", () => {
+      openCropDialog();
+    });
+
+    removePhotoBtn.addEventListener("click", () => {
+      clearPhotoPreview();
+      closeCropDialog();
+    });
+
+    closeCropBtn.addEventListener("click", closeCropDialog);
+    zoomRange.addEventListener("input", handleZoomChange);
+
+    cropBox.addEventListener("pointerdown", (event) => {
+      if (!isCropOpen) return;
+      const drag = (moveEvent) => dragCropBox(moveEvent);
+      const stop = () => {
+        window.removeEventListener("pointermove", drag);
+        window.removeEventListener("pointerup", stop);
+      };
+      window.addEventListener("pointermove", drag);
+      window.addEventListener("pointerup", stop);
+    });
+
+    applyCropBtn.addEventListener("click", () => {
+      const cropped = readImageDataFromCrop();
+      setPhotoPreview(cropped);
+      closeCropDialog();
+    });
+
+    if (result === "success") {
+      showStatus("success", "Registration submitted successfully. Thank you!");
+      form.reset();
+      clearPhotoPreview();
+      history.replaceState({}, document.title, window.location.pathname);
+    } else if (result === "error") {
+      showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+      history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      const documentFile = form.querySelector('input[name="document"]').files[0];
+      if (!documentFile) {
+        showStatus("error", "Please upload your ID document.");
+        return;
+      }
+
+      if (!photoDataUrl) {
+        showStatus("error", "Please upload and crop your display photo.");
+        return;
+      }
+
+      submitButton.disabled = true;
+      submitButton.querySelector("span:first-child").textContent = "Submitting…";
+
+      try {
+        const payload = {
+          name: form.elements.name.value.trim(),
+          age: form.elements.age.value.trim(),
+          dob: form.elements.dob.value,
+          category: form.elements.category.value,
+          mobile: form.elements.mobile.value.trim(),
+          comment: form.elements.comment.value.trim(),
+          photo: photoDataUrl,
+          document: await readFileAsDataUrl(documentFile)
+        };
+
+        const response = await fetch(form.action, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const resultBody = await response.json().catch(() => ({}));
+
+        if (response.ok && resultBody.status === "success") {
+          showStatus("success", "Registration submitted successfully. Thank you!");
+          form.reset();
+          clearPhotoPreview();
+        } else {
+          throw new Error(resultBody.message || "Submission failed");
+        }
+      } catch (error) {
+        console.error(error);
+        showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+      } finally {
+        submitButton.disabled = false;
+        submitButton.querySelector("span:first-child").textContent = "Submit Registration";
+      }
+    });
+  </script>
+</body>
+</html>
