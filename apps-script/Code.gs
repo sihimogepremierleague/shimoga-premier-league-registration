@@ -28,6 +28,10 @@ const GOOGLE_FORM_ID = "1FAIpQLSfhmixICSDxKorc7QeOEZvjKWwSAv0HBYTIywQ2hQYj-VcXCw
 const SUCCESS_URL = "PASTE_YOUR_GITHUB_PAGES_URL_HERE";
 const ERROR_URL = SUCCESS_URL;
 
+function doOptions(e) {
+  return jsonResponse({ status: "ok" }, true);
+}
+
 function doPost(e) {
   try {
     const data = parseRequestPayload(e);
@@ -44,13 +48,13 @@ function doPost(e) {
     addFile(response, form, "Document", data.document);
 
     response.submit();
-    return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ status: "success" });
   } catch (err) {
     console.error(err);
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonResponse({
       status: "error",
       message: err && err.message ? err.message : String(err)
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
 }
 
@@ -142,6 +146,18 @@ function findItem(form, title, type) {
     }
   }
   return null;
+}
+
+function jsonResponse(payload, isPreflight) {
+  const output = ContentService.createTextOutput(JSON.stringify(payload));
+  output.setMimeType(ContentService.MimeType.JSON);
+  output.setHeader("Access-Control-Allow-Origin", "*");
+  output.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  output.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (isPreflight) {
+    output.setHeader("Access-Control-Max-Age", "3600");
+  }
+  return output;
 }
 
 function redirectPage(url) {
