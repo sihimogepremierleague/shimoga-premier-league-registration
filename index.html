@@ -23,7 +23,6 @@
 
     <section class="card" aria-labelledby="form-title">
       <div class="card-head">
-        <span class="pill">Registration</span>
         <h2 id="form-title">Tell us about yourself</h2>
       </div>
 
@@ -47,7 +46,7 @@
             </div>
             <div class="photo-actions">
               <label class="upload-button">
-                <input id="photoInput" name="photo" type="file" accept="image/*" capture="user" required>
+                <input id="photoInput" name="photo" type="file" accept="image/*" required>
                 Choose Photo
               </label>
             </div>
@@ -73,11 +72,10 @@
               <span>Category <b>*</b></span>
               <select name="category" required>
                 <option value="">Select your category</option>
-                <option>G/N Doubles 1</option>
-                <option>G/N Doubles 2</option>
+                <option>G/N Doubles</option>
                 <option>30+ Men's Doubles</option>
                 <option>40+ Men's Doubles</option>
-                <option>85+ Men's Jumble Doubles</option>
+                <option>50+ &amp; 35+ Jumble Doubles</option>
               </select>
             </label>
           </div>
@@ -158,6 +156,7 @@
     const params = new URLSearchParams(window.location.search);
     const result = params.get("status");
     let photoDataUrl = "";
+    let originalPhotoDataUrl = "";
     let isCropOpen = false;
 
     function showStatus(type, message) {
@@ -185,6 +184,7 @@
 
     function clearPhotoPreview() {
       photoDataUrl = "";
+      originalPhotoDataUrl = "";
       photoPreview.removeAttribute("src");
       photoBox.classList.remove("has-preview");
       photoInput.value = "";
@@ -192,8 +192,8 @@
     }
 
     function openCropDialog() {
-      if (!photoDataUrl) return;
-      cropImage.src = photoDataUrl;
+      if (!originalPhotoDataUrl) return;
+      cropImage.src = originalPhotoDataUrl;
       cropModal.classList.remove("hidden");
       isCropOpen = true;
       document.body.style.overflow = "hidden";
@@ -271,6 +271,7 @@
       if (!file) return;
 
       const dataUrl = await readFileAsDataUrl(file);
+      originalPhotoDataUrl = dataUrl;
       setPhotoPreview(dataUrl);
       openCropDialog();
     });
@@ -329,7 +330,7 @@
       }
 
       if (!photoDataUrl) {
-        showStatus("error", "Please upload and crop your display photo.");
+        showStatus("error", "Please upload your display photo.");
         return;
       }
 

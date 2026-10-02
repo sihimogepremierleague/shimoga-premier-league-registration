@@ -32,11 +32,10 @@ Create a Google Form and add questions with these exact titles:
 8. `Document` — File upload (image or PDF)
 
 For Category, add:
-- G/N Doubles 1
-- G/N Doubles 2
+- G/N Doubles
 - 30+ Men's Doubles
 - 40+ Men's Doubles
-- 85+ Men's Jumble Doubles
+- 50+ & 35+ Jumble Doubles
 
 Link the Google Form to a Google Sheet if you want responses in a spreadsheet.
 
