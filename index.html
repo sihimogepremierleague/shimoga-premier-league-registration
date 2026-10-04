@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <main class="page">
     <section class="brand">
@@ -29,17 +31,20 @@
       <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
       <form id="registrationForm" method="POST"
-            action="https://script.google.com/macros/s/AKfycbzYqk5QszKLfboZTs0FUqZHlzme5gCjwnMg53MFAETHo-7gOVN07_j-JZbcUQlK1q4-TQ/exec" novalidate>
+        action="https://script.google.com/macros/s/AKfycby7W8j5VuFxJ-1S4814vBP9s65AyONODNRva1mzcVHi5dzfuBvVYABSt_8NNvi2Jbf_Sw/exec"
+        novalidate>
         <div class="profile-row">
           <div class="photo-panel">
             <div class="photo-box" id="photoBox">
               <img id="photoPreview" alt="Profile preview">
               <div class="photo-placeholder">Upload photo</div>
               <div class="photo-toolbar" id="photoToolbar">
-                <button type="button" class="photo-tool photo-tool-crop" id="cropPhotoBtn" aria-label="Crop photo" title="Crop photo" disabled>
+                <button type="button" class="photo-tool photo-tool-crop" id="cropPhotoBtn" aria-label="Crop photo"
+                  title="Crop photo" disabled>
                   ✏️
                 </button>
-                <button type="button" class="photo-tool photo-tool-remove" id="removePhotoBtn" aria-label="Remove photo" title="Remove photo">
+                <button type="button" class="photo-tool photo-tool-remove" id="removePhotoBtn" aria-label="Remove photo"
+                  title="Remove photo">
                   🗑
                 </button>
               </div>
@@ -72,7 +77,8 @@
               <span>Category <b>*</b></span>
               <select name="category" required>
                 <option value="">Select your category</option>
-                <option>G/N Doubles</option>
+                <option>G/N Doubles 1</option>
+                <option>G/N Doubles 2</option>
                 <option>30+ Men's Doubles</option>
                 <option>40+ Men's Doubles</option>
                 <option>50+ &amp; 35+ Jumble Doubles</option>
@@ -84,8 +90,7 @@
         <div class="grid">
           <label class="field field-full">
             <span>Mobile Number <b>*</b></span>
-            <input name="mobile" type="tel" inputmode="tel"
-                   placeholder="10-digit mobile number" required>
+            <input name="mobile" type="tel" inputmode="tel" placeholder="10-digit mobile number" required>
           </label>
 
           <label class="field field-full">
@@ -99,7 +104,8 @@
           </label>
         </div>
 
-        <p class="note">By submitting, you are providing these details to the tournament organizers for registration purposes.</p>
+        <p class="note">By submitting, you are providing these details to the tournament organizers for registration
+          purposes.</p>
         <button class="submit" type="submit">
           <span>Submit Registration</span>
           <span class="arrow">→</span>
@@ -121,7 +127,7 @@
           <div class="crop-controls">
             <label class="zoom-field">
               <span>Zoom</span>
-              <input id="zoomRange" type="range" min="0.8" max="2" step="0.01" value="1">
+              <input id="zoomRange" type="range" min="0.2" max="2.5" step="0.01" value="1">
             </label>
             <button type="button" class="primary-button" id="applyCropBtn">Use this photo</button>
           </div>
@@ -209,7 +215,7 @@
     }
 
     function resetCropBox() {
-      const boxSize = Math.min(cropStage.clientWidth, cropStage.clientHeight) * 0.78;
+      const boxSize = Math.min(cropStage.clientWidth, cropStage.clientHeight) * 0.90;
       cropBox.style.width = boxSize + "px";
       cropBox.style.height = boxSize + "px";
       cropBox.style.left = "50%";
@@ -349,12 +355,12 @@
           document: await readFileAsDataUrl(documentFile)
         };
 
+        const formData = new URLSearchParams();
+        formData.append("payload", JSON.stringify(payload));
+
         const response = await fetch(form.action, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
+          body: formData
         });
 
         const resultBody = await response.json().catch(() => ({}));
@@ -364,11 +370,12 @@
           form.reset();
           clearPhotoPreview();
         } else {
-          throw new Error(resultBody.message || "Submission failed");
+          throw new Error(resultBody.message || "Unknown error from server");
         }
+
       } catch (error) {
         console.error(error);
-        showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+        showStatus("error", "Error: " + (error.message || "Network issue") + ". Check the exact names of your Google Form fields.");
       } finally {
         submitButton.disabled = false;
         submitButton.querySelector("span:first-child").textContent = "Submit Registration";
@@ -376,4 +383,5 @@
     });
   </script>
 </body>
+
 </html>
