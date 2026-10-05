@@ -10,8 +10,12 @@
  *    Category
  *    Mobile Number
  *    Comments
- *    Display Photo
- *    Document
+ *    Display Photo   (Short answer - stores a Google Drive link)
+ *    Document        (Short answer - stores a Google Drive link)
+ *
+ *    Apps Script cannot submit files into Google Form "File upload"
+ *    questions, so uploads are saved to a private Drive folder and the
+ *    file links are written into these two questions instead.
  *
  * 2. Replace GOOGLE_FORM_ID below.
  *    Use the EDIT id from https://docs.google.com/forms/d/<EDIT_ID>/edit
@@ -35,7 +39,15 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-paragraph-fix";
+const DEPLOY_MARKER = "2026-10-06-drive-uploads";
+
+// Uploaded files are stored in this Drive folder, owned by the script owner
+// and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
+// otherwise a folder named UPLOAD_FOLDER_NAME is found or created in My Drive.
+const UPLOAD_FOLDER_ID = "";
+const UPLOAD_FOLDER_NAME = "SPL Registration Uploads";
+
+const FILE_LINK_TITLES = ["Display Photo", "Document"];
 
 const EXPECTED_TITLES = [
   "Name",
@@ -70,7 +82,11 @@ function doGet() {
     diagnostics.missingTitles = EXPECTED_TITLES.filter(function (title) {
       return titles.indexOf(title.toLowerCase()) === -1;
     });
+    diagnostics.wrongTypeTitles = findWrongTypeFileLinkTitles(form);
     diagnostics.acceptsResponses = form.isAcceptingResponses();
+    if (diagnostics.missingTitles.length || diagnostics.wrongTypeTitles.length) {
+      diagnostics.status = "error";
+    }
   } catch (err) {
     diagnostics.status = "error";
     diagnostics.message = err && err.message ? err.message : String(err);
@@ -83,6 +99,8 @@ function doGet() {
 }
 
 function doPost(e) {
+  const savedFiles = [];
+
   try {
     const data = parseRequestPayload(e);
     const form = FormApp.openById(GOOGLE_FORM_ID);
@@ -93,8 +111,18 @@ function doPost(e) {
       );
     }
 
+    // Fail before writing anything to Drive if the form is misconfigured.
+    const wrongType = findWrongTypeFileLinkTitles(form);
+    if (wrongType.length) {
+      throw new Error(
+        "Change these Google Form questions to Short answer so file links can be stored: " +
+        wrongType.join(", ")
+      );
+    }
+
     const response = form.createResponse();
     const skipped = [];
+    const filePrefix = buildFilePrefix(data);
 
     addText(response, form, "Name", data.name, skipped);
     addText(response, form, "Age", data.age, skipped);
@@ -102,8 +130,8 @@ function doPost(e) {
     addChoice(response, form, "Category", data.category, skipped);
     addText(response, form, "Mobile Number", data.mobile, skipped);
     addText(response, form, "Comments", data.comment, skipped);
-    addFile(response, form, "Display Photo", data.photo, skipped);
-    addFile(response, form, "Document", data.document, skipped);
+    addFileLink(response, form, "Display Photo", data.photo, filePrefix, savedFiles, skipped);
+    addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
 
     response.submit();
 
@@ -114,11 +142,30 @@ function doPost(e) {
     return jsonResponse({ status: "success", skippedFields: skipped });
   } catch (err) {
     console.error(err);
+    trashFiles(savedFiles);
     return jsonResponse({
       status: "error",
       message: err && err.message ? err.message : String(err)
     });
   }
+}
+
+/**
+ * Run this once from the Apps Script editor after pasting the code.
+ * It triggers the Google Drive authorization prompt and creates the upload
+ * folder. The web app cannot save uploads until this has been authorized.
+ */
+function setupUploadFolder() {
+  const folder = getUploadFolder();
+  console.log("Upload folder ready: " + folder.getName() + " -> " + folder.getUrl());
+  return folder.getUrl();
+}
+
+function findWrongTypeFileLinkTitles(form) {
+  return FILE_LINK_TITLES.filter(function (title) {
+    return !findItem(form, title, FormApp.ItemType.TEXT) &&
+           !findItem(form, title, FormApp.ItemType.PARAGRAPH_TEXT);
+  });
 }
 
 function findMissingTitles(form) {
@@ -200,32 +247,71 @@ function addChoice(response, form, title, value, skipped) {
   }
 }
 
-function addFile(response, form, title, value, skipped) {
+function addFileLink(response, form, title, value, filePrefix, savedFiles, skipped) {
   if (!value) return;
 
-  const item = findItem(form, title, FormApp.ItemType.FILE_UPLOAD);
+  const item = findItem(form, title, FormApp.ItemType.TEXT) ||
+               findItem(form, title, FormApp.ItemType.PARAGRAPH_TEXT);
   if (!item) {
-    noteSkipped(skipped, title, "no file-upload question with this title");
+    noteSkipped(skipped, title, "no short-answer question with this title");
     return;
   }
 
-  let blob = null;
-  if (typeof value === "string" && value.indexOf("data:") === 0) {
-    const match = value.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      const mimeType = match[1];
-      const byteArray = Utilities.base64Decode(match[2]);
-      const extension = getFileExtensionFromMime(mimeType);
-      const fileName = (title.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "upload") + extension;
-      blob = Utilities.newBlob(byteArray, mimeType, fileName);
-    }
+  const match = typeof value === "string" && value.match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) {
+    noteSkipped(skipped, title, "value was not a base64 data URL");
+    return;
   }
 
-  if (blob) {
-    response.withItemResponse(item.asFileUploadItem().createResponse(blob));
-  } else {
-    noteSkipped(skipped, title, "value was not a base64 data URL");
+  const mimeType = match[1].toLowerCase();
+  if (mimeType.indexOf("image/") !== 0 && mimeType !== "application/pdf") {
+    throw new Error(title + " must be an image or PDF file (received " + mimeType + ").");
   }
+
+  const fileName = filePrefix + "_" + slugify(title) + getFileExtensionFromMime(mimeType);
+  const blob = Utilities.newBlob(Utilities.base64Decode(match[2]), mimeType, fileName);
+  const file = getUploadFolder().createFile(blob);
+  savedFiles.push(file);
+
+  const url = file.getUrl();
+  if (item.getType() === FormApp.ItemType.PARAGRAPH_TEXT) {
+    response.withItemResponse(item.asParagraphTextItem().createResponse(url));
+  } else {
+    response.withItemResponse(item.asTextItem().createResponse(url));
+  }
+}
+
+function getUploadFolder() {
+  if (UPLOAD_FOLDER_ID) {
+    return DriveApp.getFolderById(UPLOAD_FOLDER_ID);
+  }
+
+  const folders = DriveApp.getRootFolder().getFoldersByName(UPLOAD_FOLDER_NAME);
+  return folders.hasNext() ? folders.next() : DriveApp.getRootFolder().createFolder(UPLOAD_FOLDER_NAME);
+}
+
+function trashFiles(files) {
+  files.forEach(function (file) {
+    try {
+      file.setTrashed(true);
+    } catch (err) {
+      console.error("Could not trash orphaned upload " + file.getName() + ": " + err);
+    }
+  });
+}
+
+function buildFilePrefix(data) {
+  const stamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyyMMdd-HHmmss");
+  const parts = [stamp, slugify(data.mobile), slugify(data.name)].filter(Boolean);
+  return parts.join("_");
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
 }
 
 function noteSkipped(skipped, title, reason) {
@@ -238,6 +324,9 @@ function getFileExtensionFromMime(mimeType) {
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
     "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
     "application/pdf": ".pdf"
   };
   return extensions[mimeType] || "";

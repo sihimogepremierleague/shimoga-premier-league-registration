@@ -28,8 +28,13 @@ Create a Google Form and add questions with these exact titles:
 4. `Category` — Dropdown OR Multiple choice
 5. `Mobile Number` — Short answer
 6. `Comments` — Long answer
-7. `Display Photo` — File upload
-8. `Document` — File upload (image or PDF)
+7. `Display Photo` — Short answer (stores a Google Drive link)
+8. `Document` — Short answer (stores a Google Drive link)
+
+> Do **not** use the "File upload" question type. Apps Script cannot submit
+> files into File upload questions. The script saves the uploaded photo and ID
+> document to a private Google Drive folder and writes each file's Drive link
+> into these two questions instead.
 
 For Category, add:
 - G/N Doubles
@@ -69,6 +74,13 @@ Use:
 
 Authorize the script when Google asks.
 
+Then, in the Apps Script editor, select the `setupUploadFolder` function in the
+toolbar and click **Run**. This grants Google Drive access and creates the
+`SPL Registration Uploads` folder in your My Drive. Uploads are owned by you and
+stay private. To use an existing folder instead, set `UPLOAD_FOLDER_ID` in
+`Code.gs`. Run it again whenever Google asks for new permissions after a code
+change, otherwise the web app returns an authorization error.
+
 Copy the Web app URL.
 
 > **Redeploying after any code change:** editing `Code.gs` does *not* update the
@@ -97,10 +109,11 @@ health check, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-paragraph-fix",
+  "deployedVersion": "2026-10-06-drive-uploads",
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
   "missingTitles": [],
+  "wrongTypeTitles": [],
   "acceptsResponses": true
 }
 ```
@@ -111,6 +124,9 @@ Check that:
   not, the new version was never deployed.
 - `missingTitles` is empty. Anything listed there is a Google Form question
   whose title does not exactly match what `Code.gs` expects.
+- `wrongTypeTitles` is empty. Anything listed there (normally `Display Photo`
+  or `Document`) is still a File upload question and must be changed to Short
+  answer.
 - `status` is `ok`. A `status` of `error` usually means `GOOGLE_FORM_ID` is the
   published `1FAIpQLS...` id instead of the edit id.
 
@@ -146,6 +162,13 @@ Apps Script web apps have two hard limits that cause browser CORS failures:
    `setHeader()` method — calling it throws, and Apps Script then returns an HTML
    error page without `Access-Control-Allow-Origin`, which the browser reports as
    a CORS error. Never add `Access-Control-*` headers in `Code.gs`.
+
+A `302` response from `/exec` in the browser Network tab is expected, not an
+error. Apps Script runs `doPost`/`doGet`, then redirects to
+`script.googleusercontent.com/macros/echo?...` to deliver the output. Both hops
+send `Access-Control-Allow-Origin: *`, and `fetch` follows the redirect
+automatically, so the final response is a `200` with the JSON body. The redirect
+cannot be disabled; do not set `redirect: "manual"` on the `fetch` call.
 
 Other checks when the browser still reports CORS:
 
