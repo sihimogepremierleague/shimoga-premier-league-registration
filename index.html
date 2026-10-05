@@ -29,7 +29,7 @@
       <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
       <form id="registrationForm" method="POST"
-            action="https://script.google.com/macros/s/AKfycbzYqk5QszKLfboZTs0FUqZHlzme5gCjwnMg53MFAETHo-7gOVN07_j-JZbcUQlK1q4-TQ/exec" novalidate>
+            action="https://script.google.com/macros/s/AKfycby7W8j5VuFxJ-1S4814vBP9s65AyONODNRva1mzcVHi5dzfuBvVYABSt_8NNvi2Jbf_Sw/exec" novalidate>
         <div class="profile-row">
           <div class="photo-panel">
             <div class="photo-box" id="photoBox">
@@ -359,7 +359,16 @@
           body: JSON.stringify(payload)
         });
 
-        const resultBody = await response.json().catch(() => ({}));
+        const rawBody = await response.text();
+        let resultBody = {};
+        try {
+          resultBody = JSON.parse(rawBody);
+        } catch (parseError) {
+          // A non-JSON body means Apps Script returned an error or sign-in page
+          // instead of running the script.
+          console.error("Non-JSON response from Apps Script:", rawBody.slice(0, 500));
+          throw new Error("The registration service returned an unexpected response. It may need to be redeployed.");
+        }
 
         if (response.ok && resultBody.status === "success") {
           showStatus("success", "Registration submitted successfully. Thank you!");
@@ -370,7 +379,11 @@
         }
       } catch (error) {
         console.error(error);
-        showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+        const isNetworkFailure = error instanceof TypeError;
+        const detail = isNetworkFailure
+          ? "Could not reach the registration service."
+          : error.message;
+        showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
       } finally {
         submitButton.disabled = false;
         submitButton.querySelector("span:first-child").textContent = "Submit Registration";

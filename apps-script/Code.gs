@@ -31,14 +31,68 @@
  * to work.
  */
 
-const GOOGLE_FORM_ID = "1FAIpQLSfhmixICSDxKorc7QeOEZvjKWwSAv0HBYTIywQ2hQYj-VcXCw";
-const SUCCESS_URL = "PASTE_YOUR_GITHUB_PAGES_URL_HERE";
-const ERROR_URL = SUCCESS_URL;
+const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
+
+// Bump this when you edit the script, then redeploy a NEW version.
+// Opening the /exec URL in a browser must echo the same value back.
+const DEPLOY_MARKER = "2026-10-06-form-id";
+
+const EXPECTED_TITLES = [
+  "Name",
+  "Age",
+  "Date of Birth",
+  "Category",
+  "Mobile Number",
+  "Comments",
+  "Display Photo",
+  "Document"
+];
+
+/**
+ * Health check. Open the /exec URL directly in a browser after deploying.
+ * Reports the deployed code version, whether GOOGLE_FORM_ID can be opened,
+ * and which expected question titles are present or missing.
+ */
+function doGet() {
+  const diagnostics = { status: "ok", deployedVersion: DEPLOY_MARKER };
+
+  try {
+    const form = FormApp.openById(GOOGLE_FORM_ID);
+    const items = form.getItems().map(function (item) {
+      return { title: item.getTitle(), type: String(item.getType()) };
+    });
+    const titles = items.map(function (item) {
+      return item.title.trim().toLowerCase();
+    });
+
+    diagnostics.formTitle = form.getTitle();
+    diagnostics.items = items;
+    diagnostics.missingTitles = EXPECTED_TITLES.filter(function (title) {
+      return titles.indexOf(title.toLowerCase()) === -1;
+    });
+    diagnostics.acceptsResponses = form.isAcceptingResponses();
+  } catch (err) {
+    diagnostics.status = "error";
+    diagnostics.message = err && err.message ? err.message : String(err);
+    diagnostics.hint =
+      "GOOGLE_FORM_ID must be the edit id from /forms/d/<EDIT_ID>/edit, " +
+      "not the published /forms/d/e/1FAIpQLS.../viewform id.";
+  }
+
+  return jsonResponse(diagnostics);
+}
 
 function doPost(e) {
   try {
     const data = parseRequestPayload(e);
     const form = FormApp.openById(GOOGLE_FORM_ID);
+    const missing = findMissingTitles(form);
+    if (missing.length) {
+      throw new Error(
+        "Google Form is missing these question titles: " + missing.join(", ")
+      );
+    }
+
     const response = form.createResponse();
 
     addText(response, form, "Name", data.name);
@@ -59,6 +113,15 @@ function doPost(e) {
       message: err && err.message ? err.message : String(err)
     });
   }
+}
+
+function findMissingTitles(form) {
+  const titles = form.getItems().map(function (item) {
+    return item.getTitle().trim().toLowerCase();
+  });
+  return EXPECTED_TITLES.filter(function (title) {
+    return titles.indexOf(title.toLowerCase()) === -1;
+  });
 }
 
 function parseRequestPayload(e) {
@@ -156,16 +219,4 @@ function jsonResponse(payload) {
   const output = ContentService.createTextOutput(JSON.stringify(payload));
   output.setMimeType(ContentService.MimeType.JSON);
   return output;
-}
-
-function redirectPage(url) {
-  const safeUrl = String(url).replace(/"/g, "&quot;");
-  return HtmlService.createHtmlOutput(
-    '<!doctype html><html><head>' +
-    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<meta http-equiv="refresh" content="0;url=' + safeUrl + '">' +
-    '</head><body>' +
-    '<script>window.top.location.href=' + JSON.stringify(url) + ';</script>' +
-    '</body></html>'
-  );
 }

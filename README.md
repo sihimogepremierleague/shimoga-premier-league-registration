@@ -71,6 +71,12 @@ Authorize the script when Google asks.
 
 Copy the Web app URL.
 
+> **Redeploying after any code change:** editing `Code.gs` does *not* update the
+> live `/exec` URL. You must go to **Deploy → Manage deployments → Edit (pencil)
+> → Version: New version → Deploy**. Creating only a new "test deployment" or
+> saving the file is not enough — the old code keeps serving until you publish a
+> new version.
+
 ## 4. Configure the website
 
 Open `index.html` and replace:
@@ -79,18 +85,40 @@ PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE
 
 with the Apps Script Web app URL.
 
-Then replace the Apps Script values:
+Then set the Google Form edit ID in `apps-script/Code.gs`:
 
-PASTE_YOUR_GOOGLE_FORM_ID_HERE
-PASTE_YOUR_GITHUB_PAGES_URL_HERE
+const GOOGLE_FORM_ID = "YOUR_FORM_EDIT_ID";
 
-`SUCCESS_URL` and `ERROR_URL` should both be the published website URL.
+## 5. Verify the deployment
 
-Example:
+Open the Web app `/exec` URL directly in a browser. `doGet` returns a JSON
+health check, for example:
 
-const SUCCESS_URL = "https://yourname.github.io/shimoga-premier-league-registration/";
+```json
+{
+  "status": "ok",
+  "deployedVersion": "2026-10-06-form-id",
+  "formTitle": "SPL Registration",
+  "items": [{ "title": "Name", "type": "TEXT" }],
+  "missingTitles": [],
+  "acceptsResponses": true
+}
+```
 
-## 5. Test before publishing
+Check that:
+
+- `deployedVersion` matches `DEPLOY_MARKER` in your local `Code.gs`. If it does
+  not, the new version was never deployed.
+- `missingTitles` is empty. Anything listed there is a Google Form question
+  whose title does not exactly match what `Code.gs` expects.
+- `status` is `ok`. A `status` of `error` usually means `GOOGLE_FORM_ID` is the
+  published `1FAIpQLS...` id instead of the edit id.
+
+If you get a raw HTML error page instead of JSON, the script is throwing before
+it can respond. That page has no CORS header, so the browser reports it on the
+website as `TypeError: Failed to fetch`.
+
+## 6. Test before publishing
 
 Open the website and submit a test registration.
 
@@ -128,7 +156,7 @@ Other checks when the browser still reports CORS:
 - Run `doPost` once in the Apps Script editor and accept the authorization
   prompt. An unauthorized script returns an error page instead of JSON.
 
-## 6. Free hosting
+## 7. Free hosting
 
 GitHub Pages can host these static files.
 
