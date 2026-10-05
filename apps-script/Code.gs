@@ -39,7 +39,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-drive-uploads";
+const DEPLOY_MARKER = "2026-10-06-drive-auth-check";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -93,6 +93,19 @@ function doGet() {
     diagnostics.hint =
       "GOOGLE_FORM_ID must be the edit id from /forms/d/<EDIT_ID>/edit, " +
       "not the published /forms/d/e/1FAIpQLS.../viewform id.";
+  }
+
+  try {
+    diagnostics.uploadFolderExists = UPLOAD_FOLDER_ID
+      ? Boolean(DriveApp.getFolderById(UPLOAD_FOLDER_ID))
+      : DriveApp.getRootFolder().getFoldersByName(UPLOAD_FOLDER_NAME).hasNext();
+    diagnostics.driveAuthorized = true;
+  } catch (err) {
+    diagnostics.status = "error";
+    diagnostics.driveAuthorized = false;
+    diagnostics.driveHint =
+      "Open the Apps Script editor, select setupUploadFolder, click Run and " +
+      "accept the Google Drive permission prompt as the deployment owner.";
   }
 
   return jsonResponse(diagnostics);

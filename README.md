@@ -109,12 +109,14 @@ health check, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-drive-uploads",
+  "deployedVersion": "2026-10-06-drive-auth-check",
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
   "missingTitles": [],
   "wrongTypeTitles": [],
-  "acceptsResponses": true
+  "acceptsResponses": true,
+  "uploadFolderExists": true,
+  "driveAuthorized": true
 }
 ```
 
@@ -127,6 +129,9 @@ Check that:
 - `wrongTypeTitles` is empty. Anything listed there (normally `Display Photo`
   or `Document`) is still a File upload question and must be changed to Short
   answer.
+- `driveAuthorized` is `true`. If it is `false`, submissions fail with
+  "You do not have permission to call DriveApp...". Run `setupUploadFolder` in
+  the Apps Script editor and accept the Drive permission prompt.
 - `status` is `ok`. A `status` of `error` usually means `GOOGLE_FORM_ID` is the
   published `1FAIpQLS...` id instead of the edit id.
 
