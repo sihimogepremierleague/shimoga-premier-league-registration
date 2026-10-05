@@ -311,7 +311,7 @@
       clearPhotoPreview();
       history.replaceState({}, document.title, window.location.pathname);
     } else if (result === "error") {
-      showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+      showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (9740603178/9900550930)");
       history.replaceState({}, document.title, window.location.pathname);
     }
 
@@ -383,7 +383,7 @@
         const detail = isNetworkFailure
           ? "Could not reach the registration service."
           : error.message;
-        showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (Nithin/Anil/Basavaraj)");
+        showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (9740603178/9900550930)");
       } finally {
         submitButton.disabled = false;
         submitButton.querySelector("span:first-child").textContent = "Submit Registration";

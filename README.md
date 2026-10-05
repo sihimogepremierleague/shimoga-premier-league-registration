@@ -97,7 +97,7 @@ health check, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-form-id",
+  "deployedVersion": "2026-10-06-paragraph-fix",
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
   "missingTitles": [],

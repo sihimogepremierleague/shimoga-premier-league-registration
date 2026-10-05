@@ -35,7 +35,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-form-id";
+const DEPLOY_MARKER = "2026-10-06-paragraph-fix";
 
 const EXPECTED_TITLES = [
   "Name",
@@ -94,18 +94,24 @@ function doPost(e) {
     }
 
     const response = form.createResponse();
+    const skipped = [];
 
-    addText(response, form, "Name", data.name);
-    addText(response, form, "Age", data.age);
-    addDate(response, form, "Date of Birth", data.dob);
-    addChoice(response, form, "Category", data.category);
-    addText(response, form, "Mobile Number", data.mobile);
-    addText(response, form, "Comments", data.comment);
-    addFile(response, form, "Display Photo", data.photo);
-    addFile(response, form, "Document", data.document);
+    addText(response, form, "Name", data.name, skipped);
+    addText(response, form, "Age", data.age, skipped);
+    addDate(response, form, "Date of Birth", data.dob, skipped);
+    addChoice(response, form, "Category", data.category, skipped);
+    addText(response, form, "Mobile Number", data.mobile, skipped);
+    addText(response, form, "Comments", data.comment, skipped);
+    addFile(response, form, "Display Photo", data.photo, skipped);
+    addFile(response, form, "Document", data.document, skipped);
 
     response.submit();
-    return jsonResponse({ status: "success" });
+
+    if (skipped.length) {
+      console.warn("Submitted, but these values had no matching form item: " + skipped.join(", "));
+    }
+
+    return jsonResponse({ status: "success", skippedFields: skipped });
   } catch (err) {
     console.error(err);
     return jsonResponse({
@@ -138,29 +144,54 @@ function parseRequestPayload(e) {
   return e && e.parameter ? e.parameter : {};
 }
 
-function addText(response, form, title, value) {
+function addText(response, form, title, value, skipped) {
   if (!value) return;
-  const item = findItem(form, title, FormApp.ItemType.TEXT);
-  if (item) response.withItemResponse(item.asTextItem().createResponse(String(value)));
-}
 
-function addDate(response, form, title, value) {
-  if (!value) return;
-  const item = findItem(form, title, FormApp.ItemType.DATE);
-  if (item) {
-    const parts = String(value).split("-");
-    if (parts.length === 3) {
-      const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-      response.withItemResponse(item.asDateItem().createResponse(date));
-    }
+  const textItem = findItem(form, title, FormApp.ItemType.TEXT);
+  if (textItem) {
+    response.withItemResponse(textItem.asTextItem().createResponse(String(value)));
+    return;
   }
+
+  // A "Long answer" question is PARAGRAPH_TEXT, which is a distinct item type
+  // that asTextItem() cannot handle.
+  const paragraphItem = findItem(form, title, FormApp.ItemType.PARAGRAPH_TEXT);
+  if (paragraphItem) {
+    response.withItemResponse(paragraphItem.asParagraphTextItem().createResponse(String(value)));
+    return;
+  }
+
+  noteSkipped(skipped, title, "no short-answer or long-answer question with this title");
 }
 
-function addChoice(response, form, title, value) {
+function addDate(response, form, title, value, skipped) {
   if (!value) return;
+
+  const item = findItem(form, title, FormApp.ItemType.DATE);
+  if (!item) {
+    noteSkipped(skipped, title, "no date question with this title");
+    return;
+  }
+
+  const parts = String(value).split("-");
+  if (parts.length !== 3) {
+    noteSkipped(skipped, title, "value is not in YYYY-MM-DD format");
+    return;
+  }
+
+  const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  response.withItemResponse(item.asDateItem().createResponse(date));
+}
+
+function addChoice(response, form, title, value, skipped) {
+  if (!value) return;
+
   const item = findItem(form, title, FormApp.ItemType.MULTIPLE_CHOICE) ||
                findItem(form, title, FormApp.ItemType.LIST);
-  if (!item) return;
+  if (!item) {
+    noteSkipped(skipped, title, "no multiple-choice or dropdown question with this title");
+    return;
+  }
 
   if (item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) {
     response.withItemResponse(item.asMultipleChoiceItem().createResponse(String(value)));
@@ -169,11 +200,14 @@ function addChoice(response, form, title, value) {
   }
 }
 
-function addFile(response, form, title, value) {
+function addFile(response, form, title, value, skipped) {
   if (!value) return;
 
   const item = findItem(form, title, FormApp.ItemType.FILE_UPLOAD);
-  if (!item) return;
+  if (!item) {
+    noteSkipped(skipped, title, "no file-upload question with this title");
+    return;
+  }
 
   let blob = null;
   if (typeof value === "string" && value.indexOf("data:") === 0) {
@@ -189,7 +223,13 @@ function addFile(response, form, title, value) {
 
   if (blob) {
     response.withItemResponse(item.asFileUploadItem().createResponse(blob));
+  } else {
+    noteSkipped(skipped, title, "value was not a base64 data URL");
   }
+}
+
+function noteSkipped(skipped, title, reason) {
+  if (skipped) skipped.push(title + " (" + reason + ")");
 }
 
 function getFileExtensionFromMime(mimeType) {
