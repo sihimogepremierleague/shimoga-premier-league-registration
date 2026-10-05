@@ -12,6 +12,12 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Supplied SPL logo
 - Custom badminton/Shivamogga background
 - Name, age, DOB, category, mobile, comments, display photo and document fields
+- Age is auto-calculated from Date of Birth and shown read-only as
+  `X years, Y days`; DOB cannot be in the future or more than 70 years ago
+- Display photo and document are limited to 3 MB each (checked in the browser
+  and again in Apps Script)
+- Mobile-friendly photo cropper: drag to move, pinch / slider to zoom, rotate;
+  the cropped photo is saved as a square JPEG of at most 800×800 px
 - Client-side validation
 - Success message
 - Failure message
@@ -23,7 +29,7 @@ The page is intentionally designed as a tournament registration page, not as an 
 Create a Google Form and add questions with these exact titles:
 
 1. `Name` — Short answer
-2. `Age` — Short answer
+2. `Age` — Short answer (receives text such as `34 years, 120 days`, so do not add number validation)
 3. `Date of Birth` — Date
 4. `Category` — Dropdown OR Multiple choice
 5. `Mobile Number` — Short answer

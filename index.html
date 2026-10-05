@@ -32,11 +32,11 @@
             action="https://script.google.com/macros/s/AKfycby7W8j5VuFxJ-1S4814vBP9s65AyONODNRva1mzcVHi5dzfuBvVYABSt_8NNvi2Jbf_Sw/exec" novalidate>
         <div class="profile-row">
           <div class="photo-panel">
-            <div class="photo-box" id="photoBox">
+            <div class="photo-box" id="photoBox" role="button" tabindex="0" aria-label="Choose or adjust display photo">
               <img id="photoPreview" alt="Profile preview">
-              <div class="photo-placeholder">Upload photo</div>
+              <div class="photo-placeholder"><span class="photo-placeholder-icon" aria-hidden="true">📷</span>Tap to add photo</div>
               <div class="photo-toolbar" id="photoToolbar">
-                <button type="button" class="photo-tool photo-tool-crop" id="cropPhotoBtn" aria-label="Crop photo" title="Crop photo" disabled>
+                <button type="button" class="photo-tool photo-tool-crop" id="cropPhotoBtn" aria-label="Adjust photo" title="Adjust photo" disabled>
                   ✏️
                 </button>
                 <button type="button" class="photo-tool photo-tool-remove" id="removePhotoBtn" aria-label="Remove photo" title="Remove photo">
@@ -46,10 +46,12 @@
             </div>
             <div class="photo-actions">
               <label class="upload-button">
-                <input id="photoInput" name="photo" type="file" accept="image/*" required>
-                Choose Photo
+                <input id="photoInput" type="file" accept="image/*">
+                <span id="photoButtonLabel">Choose Photo</span>
               </label>
             </div>
+            <p class="field-hint photo-hint">Display photo <b>*</b> · JPG/PNG, max 3 MB</p>
+            <p class="field-error" id="photoError" role="alert" hidden></p>
           </div>
 
           <div class="grid" style="flex: 1; width: 100%;">
@@ -59,13 +61,15 @@
             </label>
 
             <label class="field">
-              <span>Age <b>*</b></span>
-              <input name="age" type="number" min="1" max="100" inputmode="numeric" placeholder="Age" required>
+              <span>Date of Birth <b>*</b></span>
+              <input name="dob" id="dobInput" type="date" required aria-describedby="dobError">
+              <span class="field-error" id="dobError" role="alert" hidden></span>
             </label>
 
             <label class="field">
-              <span>Date of Birth <b>*</b></span>
-              <input name="dob" type="date" required>
+              <span>Age</span>
+              <input name="age" id="ageInput" type="text" readonly tabindex="-1"
+                     class="readonly-input" placeholder="Auto from DOB" aria-readonly="true">
             </label>
 
             <label class="field field-full">
@@ -94,13 +98,28 @@
           </label>
 
           <label class="field field-full">
-            <span>Document (ID proof / image or PDF) <b>*</b></span>
-            <input name="document" type="file" accept="image/*,.pdf" required>
+            <span>Aadhaar (Image or PDF) <b>*</b></span>
+            <input name="document" id="documentInput" type="file" accept="image/*,.pdf" required aria-describedby="documentHint documentError">
+            <span class="field-hint" id="documentHint">Image or PDF, max 3 MB</span>
+            <span class="field-error" id="documentError" role="alert" hidden></span>
           </label>
         </div>
 
+        <fieldset class="consents">
+          <legend>Declaration <b>*</b></legend>
+          <label class="consent">
+            <input type="checkbox" id="aadhaarConsent" aria-required="true">
+            <span>All the details i submitted are valid including Aadhaar. I agree to verify it, if required.</span>
+          </label>
+          <label class="consent">
+            <input type="checkbox" id="feeConsent" aria-required="true">
+            <span>I agree to pay ₹1,000 to the owner as the registration fee.</span>
+          </label>
+        </fieldset>
+
         <p class="note">By submitting, you are providing these details to the tournament organizers for registration purposes.</p>
-        <button class="submit" type="submit">
+        <p class="submit-hint" id="submitHint">Tick both declarations above to submit.</p>
+        <button class="submit" type="submit" disabled aria-describedby="submitHint">
           <span>Submit Registration</span>
           <span class="arrow">→</span>
         </button>
@@ -109,21 +128,31 @@
       <div class="crop-modal hidden" id="cropModal" aria-modal="true" role="dialog" aria-labelledby="cropTitle">
         <div class="crop-dialog">
           <div class="crop-header">
-            <h3 id="cropTitle">Crop display photo</h3>
-            <button type="button" class="close-crop" id="closeCropBtn" aria-label="Close crop dialog">×</button>
+            <h3 id="cropTitle">Adjust photo</h3>
+            <button type="button" class="close-crop" id="closeCropBtn" aria-label="Cancel and close">×</button>
           </div>
 
-          <div class="crop-stage" id="cropStage">
-            <img id="cropImage" alt="Crop preview">
-            <div class="crop-box" id="cropBox"></div>
+          <div class="crop-stage" id="cropStage" tabindex="0" aria-label="Photo position. Use arrow keys to move, plus and minus to zoom.">
+            <img id="cropImage" alt="" draggable="false">
+            <div class="crop-frame" id="cropFrame" aria-hidden="true"></div>
           </div>
+
+          <p class="crop-hint">Drag to move · Pinch or use the slider to zoom</p>
 
           <div class="crop-controls">
-            <label class="zoom-field">
-              <span>Zoom</span>
-              <input id="zoomRange" type="range" min="0.8" max="2" step="0.01" value="1">
-            </label>
-            <button type="button" class="primary-button" id="applyCropBtn">Use this photo</button>
+            <div class="zoom-row">
+              <button type="button" class="crop-icon-btn" id="zoomOutBtn" aria-label="Zoom out">−</button>
+              <input id="zoomRange" type="range" min="1" max="5" step="0.01" value="1" aria-label="Zoom">
+              <button type="button" class="crop-icon-btn" id="zoomInBtn" aria-label="Zoom in">+</button>
+            </div>
+            <div class="crop-tools">
+              <button type="button" class="secondary-button" id="rotateBtn">⟳ Rotate</button>
+              <button type="button" class="secondary-button" id="resetCropBtn">Reset</button>
+            </div>
+            <div class="crop-actions">
+              <button type="button" class="secondary-button" id="cancelCropBtn">Cancel</button>
+              <button type="button" class="primary-button" id="applyCropBtn">Use this photo</button>
+            </div>
           </div>
         </div>
       </div>
@@ -137,33 +166,67 @@
   </main>
 
   <script>
+    const MAX_FILE_BYTES = 3 * 1024 * 1024;
+    const MAX_AGE_YEARS = 70;
+    const CROP_OUTPUT_MAX = 800;
+    const MAX_ZOOM = 5;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
     const form = document.getElementById("registrationForm");
     const statusBox = document.getElementById("status");
     const submitButton = form.querySelector(".submit");
     const photoInput = document.getElementById("photoInput");
     const photoBox = document.getElementById("photoBox");
     const photoPreview = document.getElementById("photoPreview");
+    const photoButtonLabel = document.getElementById("photoButtonLabel");
+    const photoError = document.getElementById("photoError");
     const cropPhotoBtn = document.getElementById("cropPhotoBtn");
     const removePhotoBtn = document.getElementById("removePhotoBtn");
+    const dobInput = document.getElementById("dobInput");
+    const dobError = document.getElementById("dobError");
+    const ageInput = document.getElementById("ageInput");
+    const documentInput = document.getElementById("documentInput");
+    const documentError = document.getElementById("documentError");
     const cropModal = document.getElementById("cropModal");
     const cropStage = document.getElementById("cropStage");
     const cropImage = document.getElementById("cropImage");
-    const cropBox = document.getElementById("cropBox");
+    const cropFrame = document.getElementById("cropFrame");
     const zoomRange = document.getElementById("zoomRange");
+    const zoomInBtn = document.getElementById("zoomInBtn");
+    const zoomOutBtn = document.getElementById("zoomOutBtn");
+    const rotateBtn = document.getElementById("rotateBtn");
+    const resetCropBtn = document.getElementById("resetCropBtn");
     const applyCropBtn = document.getElementById("applyCropBtn");
+    const cancelCropBtn = document.getElementById("cancelCropBtn");
     const closeCropBtn = document.getElementById("closeCropBtn");
+    const consentInputs = [
+      document.getElementById("aadhaarConsent"),
+      document.getElementById("feeConsent")
+    ];
+    const submitHint = document.getElementById("submitHint");
 
     const params = new URLSearchParams(window.location.search);
     const result = params.get("status");
     let photoDataUrl = "";
-    let originalPhotoDataUrl = "";
-    let isCropOpen = false;
 
     function showStatus(type, message) {
       statusBox.hidden = false;
       statusBox.className = "status " + type;
       statusBox.textContent = message;
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function setFieldError(element, message) {
+      element.textContent = message || "";
+      element.hidden = !message;
+    }
+
+    function formatFileSize(bytes) {
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function fileTooLargeMessage(label, file) {
+      return label + " must be 3 MB or smaller. The selected file is " + formatFileSize(file.size) + ".";
     }
 
     function readFileAsDataUrl(file) {
@@ -175,162 +238,523 @@
       });
     }
 
+    /* ---------- Date of birth & age ---------- */
+
+    function startOfToday() {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    function toIsoDate(date) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+    }
+
+    function parseIsoDate(value) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+      if (!match) return null;
+      const y = Number(match[1]);
+      const m = Number(match[2]) - 1;
+      const d = Number(match[3]);
+      const date = new Date(y, m, d);
+      if (date.getFullYear() !== y || date.getMonth() !== m || date.getDate() !== d) return null;
+      return date;
+    }
+
+    // Same month/day in another year; Feb 29 falls back to Feb 28 in non-leap years.
+    function sameDayInYear(date, year) {
+      const month = date.getMonth();
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      return new Date(year, month, Math.min(date.getDate(), lastDay));
+    }
+
+    function getDobBounds() {
+      const today = startOfToday();
+      return { min: sameDayInYear(today, today.getFullYear() - MAX_AGE_YEARS), max: today };
+    }
+
+    function calculateAge(dob, today) {
+      let years = today.getFullYear() - dob.getFullYear();
+      let lastBirthday = sameDayInYear(dob, today.getFullYear());
+      if (lastBirthday > today) {
+        years -= 1;
+        lastBirthday = sameDayInYear(dob, today.getFullYear() - 1);
+      }
+      // Rounding absorbs the 23/25-hour days around DST changes.
+      const days = Math.round((today - lastBirthday) / DAY_MS);
+      return { years, days };
+    }
+
+    function formatAge(age) {
+      return age.years + (age.years === 1 ? " year, " : " years, ") +
+             age.days + (age.days === 1 ? " day" : " days");
+    }
+
+    function applyDobBounds() {
+      const bounds = getDobBounds();
+      dobInput.min = toIsoDate(bounds.min);
+      dobInput.max = toIsoDate(bounds.max);
+    }
+
+    // Returns the age string, or "" when the DOB is empty/invalid.
+    function updateAgeFromDob(showErrors) {
+      applyDobBounds();
+      const value = dobInput.value;
+      const dob = parseIsoDate(value);
+      const bounds = getDobBounds();
+      let message = "";
+
+      if (!value) {
+        message = "";
+      } else if (!dob) {
+        message = "Please enter a valid date of birth.";
+      } else if (dob > bounds.max) {
+        message = "Date of birth cannot be in the future.";
+      } else if (dob < bounds.min) {
+        message = "Date of birth cannot be more than " + MAX_AGE_YEARS + " years ago.";
+      }
+
+      dobInput.setCustomValidity(message);
+      if (showErrors || !message) setFieldError(dobError, message);
+
+      if (!dob || message) {
+        ageInput.value = "";
+        return "";
+      }
+      ageInput.value = formatAge(calculateAge(dob, bounds.max));
+      return ageInput.value;
+    }
+
+    applyDobBounds();
+    dobInput.addEventListener("input", () => updateAgeFromDob(false));
+    dobInput.addEventListener("change", () => updateAgeFromDob(true));
+    dobInput.addEventListener("blur", () => updateAgeFromDob(true));
+
+    /* ---------- Document ---------- */
+
+    documentInput.addEventListener("change", () => {
+      const file = documentInput.files && documentInput.files[0];
+      if (file && file.size > MAX_FILE_BYTES) {
+        setFieldError(documentError, fileTooLargeMessage("Document", file));
+        documentInput.value = "";
+        return;
+      }
+      setFieldError(documentError, "");
+    });
+
+    /* ---------- Display photo ---------- */
+
+    function setCropSource(image) {
+      if (cropper.source) URL.revokeObjectURL(cropper.source.src);
+      cropper.source = image;
+      cropper.saved = image ? defaultCropState() : null;
+    }
+
     function setPhotoPreview(dataUrl) {
       photoDataUrl = dataUrl;
       photoPreview.src = dataUrl;
       photoBox.classList.add("has-preview");
       cropPhotoBtn.disabled = false;
+      photoButtonLabel.textContent = "Change Photo";
+      setFieldError(photoError, "");
     }
 
     function clearPhotoPreview() {
       photoDataUrl = "";
-      originalPhotoDataUrl = "";
+      setCropSource(null);
       photoPreview.removeAttribute("src");
       photoBox.classList.remove("has-preview");
       photoInput.value = "";
       cropPhotoBtn.disabled = true;
+      photoButtonLabel.textContent = "Choose Photo";
     }
 
-    function openCropDialog() {
-      if (!originalPhotoDataUrl) return;
-      cropImage.src = originalPhotoDataUrl;
-      cropModal.classList.remove("hidden");
-      isCropOpen = true;
-      document.body.style.overflow = "hidden";
-      zoomRange.value = 1;
-      cropImage.style.transform = "scale(1)";
-      resetCropBox();
-    }
-
-    function closeCropDialog() {
-      cropModal.classList.add("hidden");
-      isCropOpen = false;
-      document.body.style.overflow = "";
-    }
-
-    function resetCropBox() {
-      const boxSize = Math.min(cropStage.clientWidth, cropStage.clientHeight) * 0.78;
-      cropBox.style.width = boxSize + "px";
-      cropBox.style.height = boxSize + "px";
-      cropBox.style.left = "50%";
-      cropBox.style.top = "50%";
-      cropBox.style.transform = "translate(-50%, -50%)";
-    }
-
-    function dragCropBox(event) {
-      if (!isCropOpen) return;
-      const rect = cropStage.getBoundingClientRect();
-      const boxRect = cropBox.getBoundingClientRect();
-      const offsetX = event.clientX - rect.left;
-      const offsetY = event.clientY - rect.top;
-      const boxWidth = boxRect.width;
-      const boxHeight = boxRect.height;
-      let newLeft = offsetX - boxWidth / 2;
-      let newTop = offsetY - boxHeight / 2;
-      const maxLeft = rect.width - boxWidth;
-      const maxTop = rect.height - boxHeight;
-      newLeft = Math.min(Math.max(newLeft, 0), maxLeft);
-      newTop = Math.min(Math.max(newTop, 0), maxTop);
-      cropBox.style.left = newLeft + "px";
-      cropBox.style.top = newTop + "px";
-      cropBox.style.transform = "translate(0, 0)";
-    }
-
-    function handleZoomChange() {
-      const zoom = Number(zoomRange.value);
-      cropImage.style.transform = "scale(" + zoom + ")";
-    }
-
-    function readImageDataFromCrop() {
-      const image = cropImage;
-      const imageRect = image.getBoundingClientRect();
-      const boxRect = cropBox.getBoundingClientRect();
-      const cropX = Math.max(0, boxRect.left - imageRect.left);
-      const cropY = Math.max(0, boxRect.top - imageRect.top);
-      const cropW = Math.min(boxRect.width, imageRect.width);
-      const cropH = Math.min(boxRect.height, imageRect.height);
-
-      const canvas = document.createElement("canvas");
-      const sx = (cropX * image.naturalWidth) / imageRect.width;
-      const sy = (cropY * image.naturalHeight) / imageRect.height;
-      const sw = (cropW * image.naturalWidth) / imageRect.width;
-      const sh = (cropH * image.naturalHeight) / imageRect.height;
-      const squareSize = Math.min(sw, sh);
-
-      canvas.width = squareSize;
-      canvas.height = squareSize;
-
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(image, sx, sy, squareSize, squareSize, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL("image/jpeg", 0.9);
+    function loadImageFromFile(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const image = new Image();
+        // The URL stays alive while the photo is in use; see setCropSource().
+        image.onload = () => resolve(image);
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Unsupported image"));
+        };
+        image.src = url;
+      });
     }
 
     photoInput.addEventListener("change", async () => {
       const file = photoInput.files && photoInput.files[0];
+      // Clear the value so choosing the same file again still fires "change".
+      photoInput.value = "";
       if (!file) return;
 
-      const dataUrl = await readFileAsDataUrl(file);
-      originalPhotoDataUrl = dataUrl;
-      setPhotoPreview(dataUrl);
+      if (file.size > MAX_FILE_BYTES) {
+        setFieldError(photoError, fileTooLargeMessage("Display photo", file));
+        return;
+      }
+
+      let image;
+      try {
+        image = await loadImageFromFile(file);
+      } catch (error) {
+        setFieldError(photoError, "This photo format is not supported. Please choose a JPG or PNG photo.");
+        return;
+      }
+
+      setCropSource(image);
+      setPhotoPreview(renderCrop(cropper.saved));
       openCropDialog();
     });
 
-    cropPhotoBtn.addEventListener("click", () => {
-      openCropDialog();
+    photoBox.addEventListener("click", (event) => {
+      if (event.target.closest(".photo-toolbar")) return;
+      if (cropper.source) openCropDialog();
+      else photoInput.click();
     });
+
+    photoBox.addEventListener("keydown", (event) => {
+      if (event.target !== photoBox) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        photoBox.click();
+      }
+    });
+
+    cropPhotoBtn.addEventListener("click", openCropDialog);
 
     removePhotoBtn.addEventListener("click", () => {
       clearPhotoPreview();
       closeCropDialog();
     });
 
-    closeCropBtn.addEventListener("click", closeCropDialog);
-    zoomRange.addEventListener("input", handleZoomChange);
+    /* ---------- Cropper ----------
+       The square frame stays fixed in the middle of the stage; the user pans,
+       zooms and rotates the photo underneath it. State is stored in
+       frame-relative units so it survives resizes and renders at any size:
+         zoom     1 = photo just covers the frame
+         x, y     offset of the photo centre from the frame centre, in frame widths
+         rotation quarter turns clockwise (0-3)                                   */
 
-    cropBox.addEventListener("pointerdown", (event) => {
-      if (!isCropOpen) return;
-      const drag = (moveEvent) => dragCropBox(moveEvent);
-      const stop = () => {
-        window.removeEventListener("pointermove", drag);
-        window.removeEventListener("pointerup", stop);
+    const cropper = {
+      source: null,
+      saved: null,
+      state: null,
+      frameSize: 0,
+      pointers: new Map(),
+      returnFocus: null
+    };
+
+    function defaultCropState() {
+      return { zoom: 1, x: 0, y: 0, rotation: 0 };
+    }
+
+    function rotatedSize(state) {
+      const w = cropper.source.naturalWidth;
+      const h = cropper.source.naturalHeight;
+      return state.rotation % 2 ? { w: h, h: w } : { w, h };
+    }
+
+    function clampCropState(state) {
+      const size = rotatedSize(state);
+      const minSide = Math.min(size.w, size.h);
+      state.zoom = Math.min(Math.max(state.zoom, 1), MAX_ZOOM);
+      const maxX = Math.max(0, (size.w / minSide * state.zoom - 1) / 2);
+      const maxY = Math.max(0, (size.h / minSide * state.zoom - 1) / 2);
+      state.x = Math.min(Math.max(state.x, -maxX), maxX);
+      state.y = Math.min(Math.max(state.y, -maxY), maxY);
+      return state;
+    }
+
+    function renderCrop(state) {
+      const image = cropper.source;
+      const size = rotatedSize(state);
+      const minSide = Math.min(size.w, size.h);
+      // Never upscale beyond the source resolution.
+      const out = Math.max(1, Math.min(CROP_OUTPUT_MAX, Math.round(minSide / state.zoom)));
+      const scale = (out / minSide) * state.zoom;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = out;
+      canvas.height = out;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, out, out);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.translate(out / 2 + state.x * out, out / 2 + state.y * out);
+      ctx.rotate(state.rotation * Math.PI / 2);
+      ctx.scale(scale, scale);
+      ctx.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+      return canvas.toDataURL("image/jpeg", 0.9);
+    }
+
+    function layoutCropStage() {
+      const rect = cropStage.getBoundingClientRect();
+      const gutter = rect.width < 480 ? 24 : 48;
+      cropper.frameSize = Math.max(120, Math.min(rect.width, rect.height) - gutter);
+      cropFrame.style.width = cropper.frameSize + "px";
+      cropFrame.style.height = cropper.frameSize + "px";
+      drawCropPreview();
+    }
+
+    function drawCropPreview() {
+      const state = cropper.state;
+      if (!state || !cropper.source) return;
+      const size = rotatedSize(state);
+      const scale = (cropper.frameSize / Math.min(size.w, size.h)) * state.zoom;
+      cropImage.style.transform =
+        "translate(-50%, -50%) translate(" + (state.x * cropper.frameSize) + "px, " + (state.y * cropper.frameSize) + "px)" +
+        " rotate(" + (state.rotation * 90) + "deg) scale(" + scale + ")";
+      zoomRange.value = state.zoom;
+      zoomOutBtn.disabled = state.zoom <= 1;
+      zoomInBtn.disabled = state.zoom >= MAX_ZOOM;
+    }
+
+    // Zoom keeping the given point (frame units from the frame centre) still.
+    function zoomCropAt(targetZoom, focusX, focusY) {
+      const state = cropper.state;
+      const nextZoom = Math.min(Math.max(targetZoom, 1), MAX_ZOOM);
+      const ratio = nextZoom / state.zoom;
+      state.x = focusX - (focusX - state.x) * ratio;
+      state.y = focusY - (focusY - state.y) * ratio;
+      state.zoom = nextZoom;
+      clampCropState(state);
+      drawCropPreview();
+    }
+
+    function panCrop(dxPixels, dyPixels) {
+      const state = cropper.state;
+      state.x += dxPixels / cropper.frameSize;
+      state.y += dyPixels / cropper.frameSize;
+      clampCropState(state);
+      drawCropPreview();
+    }
+
+    function toFrameUnits(clientX, clientY) {
+      const rect = cropStage.getBoundingClientRect();
+      return {
+        x: (clientX - (rect.left + rect.width / 2)) / cropper.frameSize,
+        y: (clientY - (rect.top + rect.height / 2)) / cropper.frameSize
       };
-      window.addEventListener("pointermove", drag);
-      window.addEventListener("pointerup", stop);
+    }
+
+    function pointerGesture() {
+      const points = Array.from(cropper.pointers.values()).slice(0, 2);
+      if (!points.length) return null;
+      const midX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+      const midY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+      const distance = points.length > 1
+        ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
+        : 0;
+      return { midX, midY, distance, count: points.length };
+    }
+
+    function openCropDialog() {
+      if (!cropper.source) return;
+      cropper.returnFocus = document.activeElement;
+      cropper.state = Object.assign({}, cropper.saved || defaultCropState());
+      cropper.pointers.clear();
+      cropImage.src = cropper.source.src;
+      cropImage.style.width = cropper.source.naturalWidth + "px";
+      cropImage.style.height = cropper.source.naturalHeight + "px";
+      cropModal.classList.remove("hidden");
+      document.body.classList.add("modal-open");
+      layoutCropStage();
+      applyCropBtn.focus({ preventScroll: true });
+    }
+
+    function closeCropDialog() {
+      if (cropModal.classList.contains("hidden")) return;
+      cropModal.classList.add("hidden");
+      document.body.classList.remove("modal-open");
+      cropper.pointers.clear();
+      cropper.state = null;
+      if (cropper.returnFocus && document.contains(cropper.returnFocus)) {
+        cropper.returnFocus.focus({ preventScroll: true });
+      }
+    }
+
+    cropStage.addEventListener("pointerdown", (event) => {
+      if (!cropper.state) return;
+      event.preventDefault();
+      try {
+        cropStage.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // Capture is only a nicety for drags that leave the stage.
+      }
+      cropper.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      cropStage.classList.add("is-dragging");
+    });
+
+    cropStage.addEventListener("pointermove", (event) => {
+      if (!cropper.state || !cropper.pointers.has(event.pointerId)) return;
+      const before = pointerGesture();
+      cropper.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const after = pointerGesture();
+
+      if (before.count === 2 && after.count === 2 && before.distance > 0) {
+        const focus = toFrameUnits(before.midX, before.midY);
+        zoomCropAt(cropper.state.zoom * (after.distance / before.distance), focus.x, focus.y);
+      }
+      panCrop(after.midX - before.midX, after.midY - before.midY);
+    });
+
+    function endPointer(event) {
+      cropper.pointers.delete(event.pointerId);
+      if (!cropper.pointers.size) cropStage.classList.remove("is-dragging");
+    }
+    cropStage.addEventListener("pointerup", endPointer);
+    cropStage.addEventListener("pointercancel", endPointer);
+
+    cropStage.addEventListener("wheel", (event) => {
+      if (!cropper.state) return;
+      event.preventDefault();
+      const focus = toFrameUnits(event.clientX, event.clientY);
+      zoomCropAt(cropper.state.zoom * Math.exp(-event.deltaY * 0.0015), focus.x, focus.y);
+    }, { passive: false });
+
+    cropStage.addEventListener("dblclick", (event) => {
+      if (!cropper.state) return;
+      const focus = toFrameUnits(event.clientX, event.clientY);
+      zoomCropAt(cropper.state.zoom < 2 ? 2 : 1, focus.x, focus.y);
+    });
+
+    cropStage.addEventListener("keydown", (event) => {
+      if (!cropper.state) return;
+      const step = 10;
+      const moves = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+      if (moves[event.key]) {
+        event.preventDefault();
+        panCrop(moves[event.key][0], moves[event.key][1]);
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        zoomCropAt(cropper.state.zoom * 1.2, 0, 0);
+      } else if (event.key === "-") {
+        event.preventDefault();
+        zoomCropAt(cropper.state.zoom / 1.2, 0, 0);
+      }
+    });
+
+    zoomRange.addEventListener("input", () => {
+      if (cropper.state) zoomCropAt(Number(zoomRange.value), 0, 0);
+    });
+    zoomInBtn.addEventListener("click", () => zoomCropAt(cropper.state.zoom * 1.25, 0, 0));
+    zoomOutBtn.addEventListener("click", () => zoomCropAt(cropper.state.zoom / 1.25, 0, 0));
+
+    rotateBtn.addEventListener("click", () => {
+      const state = cropper.state;
+      const x = state.x;
+      state.x = -state.y;
+      state.y = x;
+      state.rotation = (state.rotation + 1) % 4;
+      clampCropState(state);
+      drawCropPreview();
+    });
+
+    resetCropBtn.addEventListener("click", () => {
+      cropper.state = defaultCropState();
+      drawCropPreview();
     });
 
     applyCropBtn.addEventListener("click", () => {
-      const cropped = readImageDataFromCrop();
-      setPhotoPreview(cropped);
+      cropper.saved = Object.assign({}, cropper.state);
+      setPhotoPreview(renderCrop(cropper.saved));
       closeCropDialog();
     });
 
-    if (result === "success") {
-      showStatus("success", "Registration submitted successfully. Thank you!");
+    cancelCropBtn.addEventListener("click", closeCropDialog);
+    closeCropBtn.addEventListener("click", closeCropDialog);
+
+    cropModal.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCropDialog();
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (cropper.state) layoutCropStage();
+    });
+
+    /* ---------- Declarations ---------- */
+
+    function consentsAccepted() {
+      return consentInputs.every((input) => input.checked);
+    }
+
+    function updateSubmitState() {
+      const accepted = consentsAccepted();
+      submitButton.disabled = !accepted;
+      submitHint.hidden = accepted;
+    }
+
+    consentInputs.forEach((input) => input.addEventListener("change", updateSubmitState));
+    // Browsers can restore checkbox state on reload / back navigation.
+    window.addEventListener("pageshow", updateSubmitState);
+    updateSubmitState();
+
+    /* ---------- Status from redirect ---------- */
+
+    function resetFormState() {
       form.reset();
       clearPhotoPreview();
+      ageInput.value = "";
+      dobInput.setCustomValidity("");
+      setFieldError(dobError, "");
+      setFieldError(documentError, "");
+      setFieldError(photoError, "");
+      applyDobBounds();
+      updateSubmitState();
+    }
+
+    if (result === "success") {
+      showStatus("success", "Registration submitted successfully. Thank you!");
+      resetFormState();
       history.replaceState({}, document.title, window.location.pathname);
     } else if (result === "error") {
       showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (9740603178/9900550930)");
       history.replaceState({}, document.title, window.location.pathname);
     }
 
+    /* ---------- Submit ---------- */
+
+    function focusProblem(element) {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.focus({ preventScroll: true });
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+
+      if (!consentsAccepted()) {
+        updateSubmitState();
+        return;
+      }
+
+      if (!photoDataUrl) {
+        setFieldError(photoError, "Please add your display photo.");
+        focusProblem(photoBox);
+        return;
+      }
+
+      const age = updateAgeFromDob(true);
 
       if (!form.checkValidity()) {
         form.reportValidity();
         return;
       }
 
-      const documentFile = form.querySelector('input[name="document"]').files[0];
+      const documentFile = documentInput.files[0];
       if (!documentFile) {
-        showStatus("error", "Please upload your ID document.");
+        setFieldError(documentError, "Please upload your ID document.");
+        focusProblem(documentInput);
         return;
       }
-
-      if (!photoDataUrl) {
-        showStatus("error", "Please upload your display photo.");
+      if (documentFile.size > MAX_FILE_BYTES) {
+        setFieldError(documentError, fileTooLargeMessage("Document", documentFile));
+        documentInput.value = "";
+        focusProblem(documentInput);
         return;
       }
 
@@ -340,8 +764,8 @@
       try {
         const payload = {
           name: form.elements.name.value.trim(),
-          age: form.elements.age.value.trim(),
-          dob: form.elements.dob.value,
+          age: age,
+          dob: dobInput.value,
           category: form.elements.category.value,
           mobile: form.elements.mobile.value.trim(),
           comment: form.elements.comment.value.trim(),
@@ -372,8 +796,7 @@
 
         if (response.ok && resultBody.status === "success") {
           showStatus("success", "Registration submitted successfully. Thank you!");
-          form.reset();
-          clearPhotoPreview();
+          resetFormState();
         } else {
           throw new Error(resultBody.message || "Submission failed");
         }
@@ -385,8 +808,8 @@
           : error.message;
         showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (9740603178/9900550930)");
       } finally {
-        submitButton.disabled = false;
         submitButton.querySelector("span:first-child").textContent = "Submit Registration";
+        updateSubmitState();
       }
     });
   </script>

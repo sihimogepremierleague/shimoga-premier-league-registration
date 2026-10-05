@@ -144,6 +144,12 @@ h1 {
   background: linear-gradient(145deg, #f6faf7, #edf6f2);
   overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(11,48,40,.04);
+  cursor: pointer;
+}
+
+.photo-box:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
 }
 
 .photo-box img {
@@ -172,9 +178,25 @@ h1 {
   line-height: 1.8;
 }
 
+.photo-placeholder-icon {
+  display: block;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
 .photo-box.has-preview .photo-placeholder {
   display: none;
 }
+
+.photo-box:not(.has-preview) .photo-toolbar {
+  display: none;
+}
+
+.photo-hint {
+  text-align: center;
+}
+
+.photo-hint b { color: #d28a00; }
 
 .photo-toolbar {
   position: absolute;
@@ -256,6 +278,12 @@ h1 {
   transform: translateY(-1px);
 }
 
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .upload-button input {
   display: none;
 }
@@ -302,6 +330,59 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 4px rgba(45,112,87,.10);
 }
 
+.readonly-input,
+.readonly-input:focus {
+  background: #eef3f0;
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: none;
+  cursor: default;
+}
+
+.readonly-input::placeholder {
+  font-weight: 400;
+}
+
+/* iOS Safari renders date inputs centred and collapsed without these. */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  min-width: 0;
+  text-align: left;
+}
+
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+input[type="file"] {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.field .field-hint,
+.field-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.field .field-error,
+.field-error {
+  margin: 0;
+  color: #b23a2f;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.field-error[hidden] {
+  display: none;
+}
+
 .note {
   margin: 20px 0 15px;
   color: #77827e;
@@ -326,8 +407,76 @@ input:focus, select:focus, textarea:focus {
   transition: transform .15s, background .15s;
 }
 
-.submit:hover { background: #164c3e; transform: translateY(-1px); }
-.submit:disabled { opacity: .7; cursor: wait; transform: none; }
+.submit:hover:not(:disabled) { background: #164c3e; transform: translateY(-1px); }
+.submit:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.consents {
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.consents legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #32443e;
+}
+
+.consents legend b { color: #d28a00; }
+
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fbfdfc;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.consent:has(input:checked) {
+  border-color: #6d9f8e;
+  background: #edf7f2;
+}
+
+.consent input[type="checkbox"] {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.consent input[type="checkbox"]:focus {
+  box-shadow: none;
+}
+
+.consent input[type="checkbox"]:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.submit-hint {
+  margin: -6px 0 10px;
+  color: #9b5d00;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.submit-hint[hidden] { display: none; }
 .arrow { color: var(--gold); font-size: 20px; line-height: 0; }
 
 .status {
@@ -354,106 +503,174 @@ input:focus, select:focus, textarea:focus {
 .crop-modal {
   position: fixed;
   inset: 0;
-  background: rgba(11, 19, 17, 0.7);
-  display: grid;
-  place-items: center;
   z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 20px;
+  background: rgba(6, 14, 12, 0.82);
+  overscroll-behavior: contain;
 }
 
 .crop-modal.hidden {
   display: none;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 .crop-dialog {
-  width: min(560px, 92vw);
+  width: min(520px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
   background: white;
   border-radius: 24px;
   box-shadow: 0 30px 80px rgba(0,0,0,.28);
   padding: 18px;
+  overflow: hidden;
 }
 
 .crop-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   margin-bottom: 12px;
 }
 
 .crop-header h3 {
   margin: 0;
-  font-size: clamp(20px, 3vw, 26px);
+  font-size: clamp(18px, 3vw, 24px);
 }
 
 .close-crop {
+  flex: none;
   border: 0;
   background: #edf6f2;
   color: var(--green);
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 1;
   cursor: pointer;
 }
 
 .crop-stage {
   position: relative;
   width: 100%;
-  height: min(52vw, 420px);
-  min-height: 260px;
+  height: min(420px, 60vh);
+  min-height: 240px;
   border-radius: 18px;
   overflow: hidden;
-  background: #e7efe9;
-  border: 1px solid var(--line);
+  background: #111a17;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+  outline: none;
+}
+
+.crop-stage:focus-visible {
+  box-shadow: 0 0 0 3px var(--gold);
+}
+
+.crop-stage.is-dragging {
+  cursor: grabbing;
 }
 
 .crop-stage img {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  max-height: none;
   transform-origin: center center;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
+  will-change: transform;
 }
 
-.crop-box {
+/* Fixed square window; everything outside it is dimmed. */
+.crop-frame {
   position: absolute;
-  width: 72%;
-  aspect-ratio: 1;
-  border: 2px solid rgba(255,255,255,.95);
-  border-radius: 16px;
-  box-shadow: 0 0 0 9999px rgba(0,0,0,.38);
-  cursor: move;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  touch-action: none;
+  border: 2px solid rgba(255,255,255,.95);
+  border-radius: 22px;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px));
+}
+
+.crop-hint {
+  margin: 10px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .crop-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 16px;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
 }
 
-.zoom-field {
+.zoom-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-  flex: 1;
+  gap: 10px;
 }
 
-.zoom-field input {
+.zoom-row input[type="range"] {
   flex: 1;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   accent-color: var(--green);
+}
+
+.crop-icon-btn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: #edf6f2;
+  color: var(--green);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.crop-icon-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.crop-tools,
+.crop-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.crop-actions .primary-button,
+.crop-actions .secondary-button {
+  min-height: 50px;
+  font-size: 16px;
 }
 
 .footer-note {
@@ -481,7 +698,8 @@ input:focus, select:focus, textarea:focus {
     grid-template-columns: 1fr;
     gap: 14px;
   }
-  .photo-panel { order: -1; align-items: center; }
+  .photo-panel { order: -1; align-items: center; text-align: center; }
+  .photo-panel .field-error { max-width: 280px; }
   .photo-box { width: min(140px, 38vw); }
   .photo-actions {
     display: grid;
@@ -502,8 +720,21 @@ input:focus, select:focus, textarea:focus {
     width: 35px;
     height: 35px;
   }
-  .crop-controls { align-items: stretch; flex-direction: column; }
-  .zoom-field { width: 100%; }
+  /* Full-screen cropper on phones, controls within thumb reach. */
+  .crop-modal { padding: 0; align-items: stretch; }
+  .crop-dialog {
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    padding: max(12px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  }
+  .crop-stage {
+    flex: 1;
+    height: auto;
+    min-height: 200px;
+  }
   .submit {
     padding: 16px 18px;
     font-size: 15px;

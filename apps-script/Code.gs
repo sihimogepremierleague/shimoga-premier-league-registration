@@ -39,7 +39,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-drive-auth-check";
+const DEPLOY_MARKER = "2026-10-06-upload-size-limit";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -48,6 +48,9 @@ const UPLOAD_FOLDER_ID = "";
 const UPLOAD_FOLDER_NAME = "SPL Registration Uploads";
 
 const FILE_LINK_TITLES = ["Display Photo", "Document"];
+
+// Matches the 3 MB limit enforced by the website.
+const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
 
 const EXPECTED_TITLES = [
   "Name",
@@ -281,8 +284,13 @@ function addFileLink(response, form, title, value, filePrefix, savedFiles, skipp
     throw new Error(title + " must be an image or PDF file (received " + mimeType + ").");
   }
 
+  const bytes = Utilities.base64Decode(match[2]);
+  if (bytes.length > MAX_UPLOAD_BYTES) {
+    throw new Error(title + " must be 3 MB or smaller.");
+  }
+
   const fileName = filePrefix + "_" + slugify(title) + getFileExtensionFromMime(mimeType);
-  const blob = Utilities.newBlob(Utilities.base64Decode(match[2]), mimeType, fileName);
+  const blob = Utilities.newBlob(bytes, mimeType, fileName);
   const file = getUploadFolder().createFile(blob);
   savedFiles.push(file);
 
