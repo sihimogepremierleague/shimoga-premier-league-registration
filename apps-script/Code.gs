@@ -14,10 +14,17 @@
  *    Document
  *
  * 2. Replace GOOGLE_FORM_ID below.
+ *    Use the EDIT id from https://docs.google.com/forms/d/<EDIT_ID>/edit
+ *    (not the public /forms/d/e/1FAIpQLS.../viewform id).
  * 3. Deploy as a Web app:
  *    Execute as: Me
  *    Who has access: Anyone
  * 4. Copy the Web app URL into index.html.
+ *
+ * The website posts a JSON string with Content-Type text/plain so the browser
+ * treats it as a CORS simple request. Apps Script web apps cannot answer
+ * preflight OPTIONS requests and cannot set custom response headers, so this
+ * is the only way to call them from a browser on another origin.
  *
  * The script submits into the Google Form itself, so the normal
  * Google Form response destination (including Google Sheets) continues
@@ -27,10 +34,6 @@
 const GOOGLE_FORM_ID = "1FAIpQLSfhmixICSDxKorc7QeOEZvjKWwSAv0HBYTIywQ2hQYj-VcXCw";
 const SUCCESS_URL = "PASTE_YOUR_GITHUB_PAGES_URL_HERE";
 const ERROR_URL = SUCCESS_URL;
-
-function doOptions(e) {
-  return jsonResponse({ status: "ok" }, true);
-}
 
 function doPost(e) {
   try {
@@ -60,13 +63,12 @@ function doPost(e) {
 
 function parseRequestPayload(e) {
   if (e && e.postData && e.postData.contents) {
-    const type = String(e.postData.type || "").toLowerCase();
-    if (type.indexOf("application/json") !== -1) {
-      try {
-        return JSON.parse(e.postData.contents);
-      } catch (err) {
-        return {};
-      }
+    // The website posts a JSON string as text/plain to avoid a CORS preflight,
+    // so parse the body regardless of the declared content type.
+    try {
+      return JSON.parse(e.postData.contents);
+    } catch (err) {
+      // fall through to form-encoded parameters
     }
   }
 
@@ -148,15 +150,11 @@ function findItem(form, title, type) {
   return null;
 }
 
-function jsonResponse(payload, isPreflight) {
+function jsonResponse(payload) {
+  // Apps Script web apps cannot set custom response headers; ContentService
+  // output already carries Access-Control-Allow-Origin: * for simple requests.
   const output = ContentService.createTextOutput(JSON.stringify(payload));
   output.setMimeType(ContentService.MimeType.JSON);
-  output.setHeader("Access-Control-Allow-Origin", "*");
-  output.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  output.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (isPreflight) {
-    output.setHeader("Access-Control-Max-Age", "3600");
-  }
   return output;
 }
 

@@ -47,6 +47,10 @@ https://docs.google.com/forms/d/FORM_ID/edit
 
 then `FORM_ID` is the value between `/d/` and `/edit`.
 
+> Use the **edit** ID shown above. The public URL
+> `https://docs.google.com/forms/d/e/1FAIpQLS.../viewform` contains a different
+> ID that `FormApp.openById()` cannot open.
+
 Put that value into `apps-script/Code.gs`:
 
 const GOOGLE_FORM_ID = "YOUR_FORM_ID";
@@ -101,6 +105,28 @@ Expected flow:
    "Registration submitted successfully. Thank you!"
 
 If anything fails, the user is returned with a generic failure message.
+
+## Troubleshooting CORS errors
+
+Apps Script web apps have two hard limits that cause browser CORS failures:
+
+1. They do **not** answer preflight `OPTIONS` requests. The page therefore posts
+   JSON with `Content-Type: text/plain;charset=utf-8`, which keeps the request a
+   CORS "simple request" so no preflight is sent. Do not change this header back
+   to `application/json`.
+2. They cannot set custom response headers. `ContentService.TextOutput` has no
+   `setHeader()` method — calling it throws, and Apps Script then returns an HTML
+   error page without `Access-Control-Allow-Origin`, which the browser reports as
+   a CORS error. Never add `Access-Control-*` headers in `Code.gs`.
+
+Other checks when the browser still reports CORS:
+
+- Deployment access must be **Anyone**. With "Anyone with Google account" the
+  request is redirected to a login page that has no CORS header.
+- After editing `Code.gs`, use **Deploy → Manage deployments → Edit → New
+  version**. The `/exec` URL keeps serving the old code until you do.
+- Run `doPost` once in the Apps Script editor and accept the authorization
+  prompt. An unauthorized script returns an error page instead of JSON.
 
 ## 6. Free hosting
 

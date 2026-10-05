@@ -349,10 +349,12 @@
           document: await readFileAsDataUrl(documentFile)
         };
 
+        // text/plain keeps this a CORS "simple request" so the browser does not
+        // send a preflight OPTIONS, which Apps Script web apps cannot answer.
         const response = await fetch(form.action, {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "text/plain;charset=utf-8"
           },
           body: JSON.stringify(payload)
         });
