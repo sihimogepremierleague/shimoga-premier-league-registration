@@ -66,6 +66,13 @@ Go to https://script.google.com/
 
 Create a new project and paste the contents of `apps-script/Code.gs`.
 
+Then open ⚙️ **Project Settings**, tick **Show "appsscript.json" manifest file
+in editor**, and replace the contents of `appsscript.json` with
+`apps-script/appsscript.json` from this repository. It declares the two
+permissions the script needs: Google Forms (to submit responses) and Google
+Drive (to save uploads). If the manifest lists `oauthScopes` without Drive,
+every submission fails with "You do not have permission to call DriveApp...".
+
 Deploy → New deployment → Web app
 
 Use:
@@ -78,8 +85,9 @@ Then, in the Apps Script editor, select the `setupUploadFolder` function in the
 toolbar and click **Run**. This grants Google Drive access and creates the
 `SPL Registration Uploads` folder in your My Drive. Uploads are owned by you and
 stay private. To use an existing folder instead, set `UPLOAD_FOLDER_ID` in
-`Code.gs`. Run it again whenever Google asks for new permissions after a code
-change, otherwise the web app returns an authorization error.
+`Code.gs`. Run it again whenever Google asks for new permissions after a code or manifest
+change, then deploy a **new version**. The manifest is saved with each deployed
+version, so a permission change only takes effect after redeploying.
 
 Copy the Web app URL.
 
