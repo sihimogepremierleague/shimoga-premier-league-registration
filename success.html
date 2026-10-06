@@ -56,6 +56,10 @@
             <dt>Mobile</dt>
             <dd id="playerMobile"></dd>
           </div>
+          <div class="player-tshirt-row">
+            <dt>T-Shirt Size</dt>
+            <dd id="playerTshirt"></dd>
+          </div>
           <div class="player-submitted-row">
             <dt>Submitted</dt>
             <dd><time id="playerSubmitted"></time></dd>
@@ -142,6 +146,8 @@
       document.getElementById("playerCategory").textContent = String(data.category || "—");
       document.getElementById("playerMobile").textContent =
         data.mobileLast4 ? "•••••• " + String(data.mobileLast4) : "—";
+      if (data.tshirtSize) document.getElementById("playerTshirt").textContent = String(data.tshirtSize);
+      else document.querySelector(".player-tshirt-row").hidden = true;
 
       const submitted = new Date(data.submittedAt);
       const submittedEl = document.getElementById("playerSubmitted");

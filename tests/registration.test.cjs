@@ -17,9 +17,10 @@ function createService({
   const files = [];
   const events = [];
   const types = { TEXT: "TEXT", PARAGRAPH_TEXT: "PARAGRAPH_TEXT", DATE: "DATE", LIST: "LIST", MULTIPLE_CHOICE: "MULTIPLE_CHOICE" };
-  const titles = ["Name", "Age", "Date of Birth", "Category", "Mobile Number", "Comments", "Display Photo", "Document"];
+  const titles = ["Name", "Age", "Date of Birth", "Category", "Mobile Number", "Comments", "Display Photo", "Document", "T-Shirt Size"];
   const items = titles.map((title) => {
-    const type = title === "Date of Birth" ? types.DATE : title === "Category" ? types.LIST : types.TEXT;
+    const type = title === "Date of Birth" ? types.DATE
+      : title === "Category" || title === "T-Shirt Size" ? types.LIST : types.TEXT;
     const item = {
       getTitle: () => title,
       getType: () => type,
@@ -137,6 +138,7 @@ const payload = {
   age: "30 years, 0 days",
   dob: "1996-10-06",
   category: "G/N Doubles",
+  tshirtSize: "M",
   photo: "data:image/jpeg;base64,dGVzdA==",
   document: "data:application/pdf;base64,dGVzdA=="
 };
@@ -150,6 +152,42 @@ test("only exactly ten ASCII digits are accepted before any writes", () => {
     assert.deepEqual(service.events, []);
   }
   assert.equal(createService().post(payload).status, "success");
+});
+
+test("T-shirt size must be one of S, M, L, XL, XXL before any writes", () => {
+  for (const tshirtSize of [undefined, "", "m", "XS", "XXXL", " M", 1]) {
+    const service = createService();
+    const result = service.post({ ...payload, tshirtSize });
+    assert.equal(result.status, "error");
+    assert.match(result.message, /T-shirt size/);
+    assert.deepEqual(service.events, []);
+    assert.equal(service.files.length, 0);
+  }
+  for (const tshirtSize of ["S", "M", "L", "XL", "XXL"]) {
+    const service = createService();
+    assert.equal(service.post({ ...payload, tshirtSize }).status, "success");
+    const answer = service.responses[0].getItemResponses()
+      .find((item) => item.getItem().getTitle() === "T-Shirt Size");
+    assert.equal(answer && answer.getResponse(), tshirtSize);
+  }
+});
+
+test("uploads are limited to 5 MB each and oversized files are not kept", () => {
+  const dataUrl = (type, size) => "data:" + type + ";base64," + Buffer.alloc(size).toString("base64");
+  const limit = 5 * 1024 * 1024;
+  const ok = createService();
+  assert.equal(ok.post({ ...payload, photo: dataUrl("image/jpeg", limit), document: dataUrl("application/pdf", limit) }).status, "success");
+  assert.equal(ok.files.length, 2);
+
+  for (const field of ["photo", "document"]) {
+    const service = createService();
+    const type = field === "photo" ? "image/jpeg" : "application/pdf";
+    const result = service.post({ ...payload, [field]: dataUrl(type, limit + 1) });
+    assert.equal(result.status, "error");
+    assert.match(result.message, /5 MB or smaller/);
+    assert.equal(service.responses.length, 0);
+    assert.ok(service.files.every((file) => file.trashed));
+  }
 });
 
 test("blank names are rejected", () => {

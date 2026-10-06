@@ -11,13 +11,20 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Responsive registration page
 - Supplied SPL logo
 - Custom badminton/Shivamogga background
-- Name, age, DOB, category, mobile, comments, display photo and document fields
+- Name, age, DOB, category, mobile, T-shirt size, comments, display photo and document fields
 - Age is auto-calculated from Date of Birth and shown read-only as
-  `X years, Y days`; DOB cannot be in the future or more than 70 years ago
-- Display photo and document are limited to 3 MB each (checked in the browser
+  `X years, Y days`; players must be at least 14 years old (the date picker does
+  not offer later dates) and DOB cannot be more than 70 years ago
+- Display photo and document are limited to 5 MB each (checked in the browser
   and again in Apps Script). Large document images (400 KB or more) are resized
   in the browser to at most 2000 px and re-encoded as JPEG before upload; PDFs
   are sent unchanged
+- Display photo can be chosen from files or taken with the camera (**Take Photo**).
+  Phones and tablets open the native camera; desktops show a live camera preview
+  with a face guide, shutter and front/back switch, and fall back to the file
+  picker when no camera API is available. Camera shots go through the same cropper,
+  so full-resolution phone photos (up to 25 MB) are accepted before cropping
+- T-shirt size (S, M, L, XL, XXL) is mandatory and validated in the browser and Apps Script
 - Mobile-friendly photo cropper: drag to move, pinch / slider to zoom, rotate;
   the cropped photo is saved as a square JPEG of at most 800×800 px
 - Client-side validation
@@ -53,9 +60,10 @@ Create a Google Form and add questions with these exact titles:
 3. `Date of Birth` — Date
 4. `Category` — Dropdown OR Multiple choice
 5. `Mobile Number` — Short answer
-6. `Comments` — Long answer
-7. `Display Photo` — Short answer (stores a Google Drive link)
-8. `Document` — Short answer (stores a Google Drive link)
+6. `T-Shirt Size` — Dropdown OR Multiple choice with exactly these options: `S`, `M`, `L`, `XL`, `XXL`
+7. `Comments` — Long answer
+8. `Display Photo` — Short answer (stores a Google Drive link)
+9. `Document` — Short answer (stores a Google Drive link)
 
 > Do **not** use the "File upload" question type. Apps Script cannot submit
 > files into File upload questions. The script saves the uploaded photo and ID
@@ -146,7 +154,7 @@ Open the Web app `/exec` URL directly in a browser. It returns a fast liveness
 check that does not touch the Form or Drive:
 
 ```json
-{ "status": "ok", "deployedVersion": "2026-10-06-fast-duplicate-index" }
+{ "status": "ok", "deployedVersion": "2026-10-06-5mb-uploads" }
 ```
 
 For the full configuration check, open `/exec?diagnostics=1`, for example:
@@ -154,7 +162,7 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-fast-duplicate-index",
+  "deployedVersion": "2026-10-06-5mb-uploads",
   "timingsMs": { "openForm": 400, "readItems": 300, "readResponses": 900, "duplicateScan": 1200, "checkDrive": 500, "total": 3300 },
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],

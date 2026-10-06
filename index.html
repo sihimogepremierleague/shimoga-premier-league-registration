@@ -66,8 +66,12 @@
                 <input id="photoInput" type="file" accept="image/*">
                 <span id="photoButtonLabel">Choose Photo</span>
               </label>
+              <button type="button" class="secondary-button camera-button" id="takePhotoBtn">
+                <span aria-hidden="true">📸</span> Take Photo
+              </button>
+              <input id="cameraInput" type="file" accept="image/*" capture="user" hidden>
             </div>
-            <p class="field-hint photo-hint">Display photo <b>*</b> · JPG/PNG, max 3 MB</p>
+            <p class="field-hint photo-hint">Display photo <b>*</b> · JPG/PNG, max 5 MB</p>
             <p class="field-error" id="photoError" role="alert" hidden></p>
           </div>
 
@@ -112,6 +116,18 @@
           </label>
 
           <label class="field field-full">
+            <span>T-Shirt Size <b>*</b></span>
+            <select name="tshirtSize" required>
+              <option value="">Select your T-shirt size</option>
+              <option>S</option>
+              <option>M</option>
+              <option>L</option>
+              <option>XL</option>
+              <option>XXL</option>
+            </select>
+          </label>
+
+          <label class="field field-full">
             <span>Comments </span>
             <textarea name="comment" id="commentInput" rows="4" maxlength="250" placeholder="Where do you practice / Achievements / experience" aria-describedby="commentCount"></textarea>
             <span class="field-hint char-count" id="commentCount">0 / 250</span>
@@ -120,7 +136,7 @@
           <label class="field field-full">
             <span>Aadhaar (Image or PDF) <b>*</b></span>
             <input name="document" id="documentInput" type="file" accept="image/*,.pdf" required aria-describedby="documentHint documentError">
-            <span class="field-hint" id="documentHint">Image or PDF, max 3 MB</span>
+            <span class="field-hint" id="documentHint">Image or PDF, max 5 MB</span>
             <span class="field-error" id="documentError" role="alert" hidden></span>
           </label>
         </div>
@@ -148,6 +164,29 @@
           <span class="arrow">→</span>
         </button>
       </form>
+
+      <div class="crop-modal hidden" id="cameraModal" aria-modal="true" role="dialog" aria-labelledby="cameraTitle">
+        <div class="crop-dialog">
+          <div class="crop-header">
+            <h3 id="cameraTitle">Take photo</h3>
+            <button type="button" class="close-crop" id="closeCameraBtn" aria-label="Close camera">×</button>
+          </div>
+
+          <div class="camera-stage">
+            <video id="cameraVideo" autoplay playsinline muted></video>
+            <div class="camera-guide" aria-hidden="true"></div>
+            <p class="camera-status" id="cameraStatus" role="status" aria-live="polite"></p>
+          </div>
+
+          <p class="crop-hint">Centre your face in the frame and look at the camera</p>
+
+          <div class="camera-controls">
+            <button type="button" class="secondary-button" id="cancelCameraBtn">Cancel</button>
+            <button type="button" class="shutter-button" id="captureBtn" aria-label="Capture photo" disabled></button>
+            <button type="button" class="secondary-button" id="switchCameraBtn" aria-label="Switch camera">⟲ Flip</button>
+          </div>
+        </div>
+      </div>
 
       <div class="crop-modal hidden" id="cropModal" aria-modal="true" role="dialog" aria-labelledby="cropTitle">
         <div class="crop-dialog">
@@ -190,7 +229,12 @@
   </main>
 
   <script>
-    const MAX_FILE_BYTES = 3 * 1024 * 1024;
+    const MAX_FILE_BYTES = 5 * 1024 * 1024;
+    const MAX_FILE_MB = MAX_FILE_BYTES / (1024 * 1024);
+    // Camera shots are only cropped locally (to at most CROP_OUTPUT_MAX px) before
+    // upload, so full-resolution phone photos above 5 MB are accepted here.
+    const MAX_CAMERA_BYTES = 25 * 1024 * 1024;
+    const MIN_AGE_YEARS = 14;
     const MAX_AGE_YEARS = 70;
     const CROP_OUTPUT_MAX = 800;
     const MAX_ZOOM = 5;
@@ -202,6 +246,15 @@
     const submitProgress = document.getElementById("submitProgress");
     const submitProgressText = document.getElementById("submitProgressText");
     const photoInput = document.getElementById("photoInput");
+    const cameraInput = document.getElementById("cameraInput");
+    const takePhotoBtn = document.getElementById("takePhotoBtn");
+    const cameraModal = document.getElementById("cameraModal");
+    const cameraVideo = document.getElementById("cameraVideo");
+    const cameraStatus = document.getElementById("cameraStatus");
+    const captureBtn = document.getElementById("captureBtn");
+    const cancelCameraBtn = document.getElementById("cancelCameraBtn");
+    const closeCameraBtn = document.getElementById("closeCameraBtn");
+    const switchCameraBtn = document.getElementById("switchCameraBtn");
     const photoBox = document.getElementById("photoBox");
     const photoPreview = document.getElementById("photoPreview");
     const photoButtonLabel = document.getElementById("photoButtonLabel");
@@ -275,7 +328,7 @@
     }
 
     function fileTooLargeMessage(label, file) {
-      return label + " must be 3 MB or smaller. The selected file is " + formatFileSize(file.size) + ".";
+      return label + " must be " + MAX_FILE_MB + " MB or smaller. The selected file is " + formatFileSize(file.size) + ".";
     }
 
     function readFileAsDataUrl(file) {
@@ -352,7 +405,11 @@
 
     function getDobBounds() {
       const today = startOfToday();
-      return { min: sameDayInYear(today, today.getFullYear() - MAX_AGE_YEARS), max: today };
+      return {
+        min: sameDayInYear(today, today.getFullYear() - MAX_AGE_YEARS),
+        max: sameDayInYear(today, today.getFullYear() - MIN_AGE_YEARS),
+        today
+      };
     }
 
     function calculateAge(dob, today) {
@@ -390,8 +447,10 @@
         message = "";
       } else if (!dob) {
         message = "Please enter a valid date of birth.";
-      } else if (dob > bounds.max) {
+      } else if (dob > bounds.today) {
         message = "Date of birth cannot be in the future.";
+      } else if (dob > bounds.max) {
+        message = "You must be at least " + MIN_AGE_YEARS + " years old to register.";
       } else if (dob < bounds.min) {
         message = "Date of birth cannot be more than " + MAX_AGE_YEARS + " years ago.";
       }
@@ -403,7 +462,7 @@
         ageInput.value = "";
         return "";
       }
-      ageInput.value = formatAge(calculateAge(dob, bounds.max));
+      ageInput.value = formatAge(calculateAge(dob, bounds.today));
       return ageInput.value;
     }
 
@@ -465,13 +524,8 @@
       });
     }
 
-    photoInput.addEventListener("change", async () => {
-      const file = photoInput.files && photoInput.files[0];
-      // Clear the value so choosing the same file again still fires "change".
-      photoInput.value = "";
-      if (!file) return;
-
-      if (file.size > MAX_FILE_BYTES) {
+    async function handlePhotoFile(file, maxBytes) {
+      if (file.size > maxBytes) {
         setFieldError(photoError, fileTooLargeMessage("Display photo", file));
         return;
       }
@@ -487,7 +541,160 @@
       setCropSource(image);
       setPhotoPreview(renderCrop(cropper.saved));
       openCropDialog();
+    }
+
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files && photoInput.files[0];
+      // Clear the value so choosing the same file again still fires "change".
+      photoInput.value = "";
+      if (file) handlePhotoFile(file, MAX_FILE_BYTES);
     });
+
+    cameraInput.addEventListener("change", () => {
+      const file = cameraInput.files && cameraInput.files[0];
+      cameraInput.value = "";
+      if (file) handlePhotoFile(file, MAX_CAMERA_BYTES);
+    });
+
+    /* ---------- Camera ----------
+       Phones open their native camera through a capture input, which gives
+       the best quality and a familiar UI. Other devices get a live preview
+       via getUserMedia, falling back to the capture input when unavailable. */
+
+    const camera = { stream: null, facingMode: "user", token: 0, returnFocus: null };
+
+    function canUseLiveCamera() {
+      return window.isSecureContext && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    }
+
+    function prefersNativeCamera() {
+      return window.matchMedia("(pointer: coarse)").matches;
+    }
+
+    function setCameraStatus(message) {
+      cameraStatus.textContent = message;
+    }
+
+    function stopCameraStream() {
+      if (camera.stream) camera.stream.getTracks().forEach((track) => track.stop());
+      camera.stream = null;
+      cameraVideo.srcObject = null;
+    }
+
+    function cameraErrorMessage(error) {
+      const name = error && error.name;
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        return "Camera access was blocked. Allow camera permission in your browser, or use Choose Photo instead.";
+      }
+      if (name === "NotFoundError" || name === "OverconstrainedError" || name === "DevicesNotFoundError") {
+        return "No camera was found on this device. Please use Choose Photo instead.";
+      }
+      if (name === "NotReadableError") {
+        return "The camera is being used by another app. Close it and try again.";
+      }
+      return "Could not start the camera. Please use Choose Photo instead.";
+    }
+
+    async function startCamera() {
+      const token = ++camera.token;
+      stopCameraStream();
+      captureBtn.disabled = true;
+      setCameraStatus("Starting camera…");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: camera.facingMode, width: { ideal: 1280 }, height: { ideal: 1280 } },
+          audio: false
+        });
+        // The dialog was closed or the camera switched while waiting for permission.
+        if (token !== camera.token) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        camera.stream = stream;
+        cameraVideo.srcObject = stream;
+        cameraVideo.classList.toggle("is-mirrored", camera.facingMode === "user");
+        await cameraVideo.play().catch(() => {});
+        setCameraStatus("");
+        captureBtn.disabled = false;
+        captureBtn.focus({ preventScroll: true });
+
+        const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+        const hasMultiple = devices.filter((device) => device.kind === "videoinput").length > 1;
+        switchCameraBtn.style.visibility = hasMultiple ? "visible" : "hidden";
+      } catch (error) {
+        if (token !== camera.token) return;
+        console.warn("Camera unavailable:", error);
+        setCameraStatus(cameraErrorMessage(error));
+      }
+    }
+
+    function openCameraDialog() {
+      camera.returnFocus = document.activeElement;
+      switchCameraBtn.style.visibility = "hidden";
+      cameraModal.classList.remove("hidden");
+      document.body.classList.add("modal-open");
+      closeCameraBtn.focus({ preventScroll: true });
+      startCamera();
+    }
+
+    function closeCameraDialog() {
+      if (cameraModal.classList.contains("hidden")) return;
+      camera.token++;
+      stopCameraStream();
+      cameraModal.classList.add("hidden");
+      document.body.classList.remove("modal-open");
+      if (camera.returnFocus && document.contains(camera.returnFocus)) {
+        camera.returnFocus.focus({ preventScroll: true });
+      }
+    }
+
+    function capturePhoto() {
+      const width = cameraVideo.videoWidth;
+      const height = cameraVideo.videoHeight;
+      if (!camera.stream || !width || !height) return;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      // Keep the photo matching the mirrored selfie preview the user saw.
+      if (cameraVideo.classList.contains("is-mirrored")) {
+        ctx.translate(width, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.drawImage(cameraVideo, 0, 0, width, height);
+      captureBtn.disabled = true;
+      canvas.toBlob((blob) => {
+        closeCameraDialog();
+        if (blob) handlePhotoFile(blob, MAX_CAMERA_BYTES);
+        else setFieldError(photoError, "Could not capture the photo. Please try again.");
+      }, "image/jpeg", 0.92);
+    }
+
+    takePhotoBtn.addEventListener("click", () => {
+      setFieldError(photoError, "");
+      if (prefersNativeCamera() || !canUseLiveCamera()) cameraInput.click();
+      else openCameraDialog();
+    });
+
+    captureBtn.addEventListener("click", capturePhoto);
+    cancelCameraBtn.addEventListener("click", closeCameraDialog);
+    closeCameraBtn.addEventListener("click", closeCameraDialog);
+
+    switchCameraBtn.addEventListener("click", () => {
+      camera.facingMode = camera.facingMode === "user" ? "environment" : "user";
+      startCamera();
+    });
+
+    cameraModal.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCameraDialog();
+      }
+    });
+
+    // Release the camera if the user leaves the page with the dialog open.
+    window.addEventListener("pagehide", closeCameraDialog);
 
     photoBox.addEventListener("click", (event) => {
       if (event.target.closest(".photo-toolbar")) return;
@@ -955,6 +1162,7 @@
           dob: dobInput.value,
           category: form.elements.category.value,
           mobile: form.elements.mobile.value.trim(),
+          tshirtSize: form.elements.tshirtSize.value,
           comment: form.elements.comment.value.trim(),
           photo: photoDataUrl,
           document: await prepareDocumentDataUrl(documentFile)
@@ -968,6 +1176,7 @@
             name: payload.name,
             category: payload.category,
             mobileLast4: payload.mobile.slice(-4),
+            tshirtSize: payload.tshirtSize,
             photo: payload.photo,
             submittedAt: new Date().toISOString()
           });

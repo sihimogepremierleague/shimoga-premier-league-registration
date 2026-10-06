@@ -9,6 +9,7 @@
  *    Date of Birth
  *    Category
  *    Mobile Number
+ *    T-Shirt Size    (Dropdown or Multiple choice: S, M, L, XL, XXL)
  *    Comments
  *    Display Photo   (Short answer - stores a Google Drive link)
  *    Document        (Short answer - stores a Google Drive link)
@@ -39,7 +40,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-fast-duplicate-index";
+const DEPLOY_MARKER = "2026-10-06-5mb-uploads";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -49,12 +50,15 @@ const UPLOAD_FOLDER_NAME = "SPL Registration Uploads";
 
 const FILE_LINK_TITLES = ["Display Photo", "Document"];
 
-// Matches the 3 MB limit enforced by the website.
-const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+// Matches the 5 MB limit enforced by the website.
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 // Match the maxlength limits on the website.
 const MAX_NAME_LENGTH = 50;
 const MAX_COMMENT_LENGTH = 250;
+
+// Must match the website dropdown and the Google Form "T-Shirt Size" choices.
+const TSHIRT_SIZES = ["S", "M", "L", "XL", "XXL"];
 
 // Script property prefix for submission ids that were saved, so a browser
 // retry after a lost response cannot register the same player twice.
@@ -83,6 +87,7 @@ const EXPECTED_TITLES = [
   "Date of Birth",
   "Category",
   "Mobile Number",
+  "T-Shirt Size",
   "Comments",
   "Display Photo",
   "Document"
@@ -205,6 +210,9 @@ function doPost(e) {
     if (typeof data.mobile !== "string" || !/^[0-9]{10}$/.test(data.mobile)) {
       throw new Error("Please enter exactly 10 digits for your mobile number.");
     }
+    if (TSHIRT_SIZES.indexOf(data.tshirtSize) === -1) {
+      throw new Error("Please select your T-shirt size.");
+    }
     data.name = data.name.trim().replace(/\s+/g, " ");
     if (data.name.length > MAX_NAME_LENGTH) {
       throw new Error("Name must be " + MAX_NAME_LENGTH + " characters or fewer.");
@@ -270,6 +278,7 @@ function doPost(e) {
     addDate(response, form, "Date of Birth", data.dob, skipped);
     addChoice(response, form, "Category", data.category, skipped);
     addText(response, form, "Mobile Number", data.mobile, skipped);
+    addChoice(response, form, "T-Shirt Size", data.tshirtSize, skipped);
     addText(response, form, "Comments", data.comment, skipped);
     addFileLink(response, form, "Display Photo", data.photo, filePrefix, savedFiles, skipped);
     addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
@@ -579,7 +588,7 @@ function addFileLink(response, form, title, value, filePrefix, savedFiles, skipp
 
   const bytes = Utilities.base64Decode(match[2]);
   if (bytes.length > MAX_UPLOAD_BYTES) {
-    throw new Error(title + " must be 3 MB or smaller.");
+    throw new Error(title + " must be " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB or smaller.");
   }
 
   const fileName = filePrefix + "_" + slugify(title) + getFileExtensionFromMime(mimeType);
