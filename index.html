@@ -776,27 +776,31 @@
     window.addEventListener("pageshow", updateSubmitState);
     updateSubmitState();
 
-    /* ---------- Status from redirect ---------- */
+    /* ---------- Success page ---------- */
 
-    function resetFormState() {
-      form.reset();
-      updateCommentCount();
-      clearPhotoPreview();
-      ageInput.value = "";
-      dobInput.setCustomValidity("");
-      mobileInput.setCustomValidity("");
-      setFieldError(mobileError, "");
-      setFieldError(dobError, "");
-      setFieldError(documentError, "");
-      setFieldError(photoError, "");
-      applyDobBounds();
-      updateSubmitState();
+    const SUCCESS_PAGE = "success.html";
+    const SUCCESS_STORAGE_KEY = "splRegistration";
+
+    function saveConfirmation(details) {
+      try {
+        sessionStorage.setItem(SUCCESS_STORAGE_KEY, JSON.stringify(details));
+      } catch (error) {
+        // Storage can be full or blocked; the photo is the only large item, so retry without it.
+        try {
+          sessionStorage.setItem(SUCCESS_STORAGE_KEY, JSON.stringify(Object.assign({}, details, { photo: "" })));
+        } catch (ignored) { /* success page falls back to a generic message */ }
+      }
     }
 
+    // replace() keeps the submitted form out of history so Back cannot resubmit it.
+    function goToSuccessPage() {
+      window.location.replace(SUCCESS_PAGE);
+    }
+
+    /* ---------- Status from redirect ---------- */
+
     if (result === "success") {
-      showStatus("success", "Registration submitted successfully. Thank you!");
-      resetFormState();
-      history.replaceState({}, document.title, window.location.pathname);
+      goToSuccessPage();
     } else if (result === "error") {
       showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (9740603178/9900550930)");
       history.replaceState({}, document.title, window.location.pathname);
@@ -901,6 +905,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (isSubmitting) return;
+      let redirecting = false;
 
       if (!consentsAccepted()) {
         updateSubmitState();
@@ -959,8 +964,16 @@
         const resultBody = await submitRegistration(payload);
 
         if (resultBody && resultBody.status === "success") {
-          showStatus("success", "Registration submitted successfully. Thank you!");
-          resetFormState();
+          saveConfirmation({
+            name: payload.name,
+            category: payload.category,
+            mobileLast4: payload.mobile.slice(-4),
+            photo: payload.photo,
+            submittedAt: new Date().toISOString()
+          });
+          redirecting = true;
+          submitProgressText.textContent = "Registration complete! Taking you to your confirmation…";
+          goToSuccessPage();
         } else if (resultBody) {
           throw new Error(resultBody.message || "Submission failed.");
         } else {
@@ -970,11 +983,14 @@
         console.error(error);
         showStatus("error", "We could not complete the registration. " + error.message + " Still facing issue contact admin (9740603178/9900550930)");
       } finally {
-        isSubmitting = false;
-        form.removeAttribute("aria-busy");
-        submitProgress.hidden = true;
-        submitButton.querySelector("span:first-child").textContent = "Submit Registration";
-        updateSubmitState();
+        // Keep the busy state while the success page loads to avoid a flash of the enabled form.
+        if (!redirecting) {
+          isSubmitting = false;
+          form.removeAttribute("aria-busy");
+          submitProgress.hidden = true;
+          submitButton.querySelector("span:first-child").textContent = "Submit Registration";
+          updateSubmitState();
+        }
       }
     });
   </script>

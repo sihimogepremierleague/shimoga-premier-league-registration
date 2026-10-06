@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b3028">
+  <meta name="robots" content="noindex">
+  <title>Registration Successful | Sihimoge Premier League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="brand">
+      <img src="assets/spl-logo.jpg" alt="Sihimoge Premier League logo" class="logo">
+      <div>
+        <p class="eyebrow">PLAYER REGISTRATION</p>
+        <p class="brand-title">Sihimoge Premier League</p>
+        <p class="sub">Play Together • Smash Limits</p>
+      </div>
+    </section>
+
+    <section class="card success-card" aria-labelledby="success-title">
+      <div class="success-hero">
+        <div class="success-badge" aria-hidden="true">
+          <svg viewBox="0 0 52 52" focusable="false">
+            <circle class="success-badge-ring" cx="26" cy="26" r="24"></circle>
+            <path class="success-badge-check" d="M15 27 l7.5 7.5 L37.5 19"></path>
+          </svg>
+        </div>
+        <span class="pill">Registration Confirmed</span>
+        <h1 id="success-title">You're registered<span id="playerFirstName"></span>!</h1>
+        <p class="success-lead">
+          Thank you for registering for the Sihimoge Premier League. Your details and documents
+          have been received by the organizers.
+        </p>
+      </div>
+
+      <div class="player-summary" id="playerSummary" hidden>
+        <div class="player-photo" id="playerPhotoWrap">
+          <img id="playerPhoto" alt="Your display photo">
+          <span class="player-initials" id="playerInitials" aria-hidden="true"></span>
+        </div>
+        <dl class="player-details">
+          <div class="player-name-row">
+            <dt class="visually-hidden">Name</dt>
+            <dd class="player-name" id="playerName"></dd>
+          </div>
+          <div>
+            <dt>Category</dt>
+            <dd id="playerCategory"></dd>
+          </div>
+          <div>
+            <dt>Mobile</dt>
+            <dd id="playerMobile"></dd>
+          </div>
+          <div class="player-submitted-row">
+            <dt>Submitted</dt>
+            <dd><time id="playerSubmitted"></time></dd>
+          </div>
+        </dl>
+      </div>
+
+      <section class="next-steps" aria-labelledby="next-steps-title">
+        <h2 id="next-steps-title">What happens next</h2>
+        <ol class="timeline">
+          <li class="timeline-item is-done">
+            <span class="timeline-marker" aria-hidden="true">✓</span>
+            <div>
+              <p class="timeline-title">Registration received</p>
+              <p class="timeline-text">Your entry has been recorded successfully.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <span class="timeline-marker" aria-hidden="true">2</span>
+            <div>
+              <p class="timeline-title">Verification</p>
+              <p class="timeline-text">Organizers will review your details and Aadhaar, and may contact you if anything needs clarification.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <span class="timeline-marker" aria-hidden="true">3</span>
+            <div>
+              <p class="timeline-title">Player Auction · <time datetime="2026-11-15">15 Nov 2026</time></p>
+              <p class="timeline-text">If selected, you pay the ₹1,000 registration fee to your team owner.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <span class="timeline-marker" aria-hidden="true">4</span>
+            <div>
+              <p class="timeline-title">League Begins · <time datetime="2026-12-06">6 Dec 2026</time></p>
+              <p class="timeline-text">Get ready to play together and smash limits!</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <div class="help-box">
+        <span class="help-icon" aria-hidden="true">☎</span>
+        <p>
+          Questions about your registration? Contact the organizers at
+          <a href="tel:+919740603178">97406 03178</a> or
+          <a href="tel:+919900550930">99005 50930</a>.
+        </p>
+      </div>
+
+      <a class="submit success-action" href="index.html" id="registerAnotherBtn">
+        <span>Register Another Player</span>
+        <span class="arrow">→</span>
+      </a>
+
+      <div class="footer-note">
+        <span>Registration page for the tournament</span>
+        <span>•</span>
+        <span>Shivamogga, Karnataka</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = "splRegistration";
+      let data = null;
+      try {
+        data = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "null");
+      } catch (error) {
+        data = null;
+      }
+
+      document.getElementById("registerAnotherBtn").addEventListener("click", () => {
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch (error) { /* storage unavailable */ }
+      });
+
+      if (!data || typeof data !== "object" || !data.name) return;
+
+      const name = String(data.name);
+      const firstName = name.split(/\s+/)[0];
+      document.getElementById("playerFirstName").textContent = ", " + firstName;
+      document.getElementById("playerName").textContent = name;
+      document.getElementById("playerCategory").textContent = String(data.category || "—");
+      document.getElementById("playerMobile").textContent =
+        data.mobileLast4 ? "•••••• " + String(data.mobileLast4) : "—";
+
+      const submitted = new Date(data.submittedAt);
+      const submittedEl = document.getElementById("playerSubmitted");
+      if (!isNaN(submitted)) {
+        submittedEl.dateTime = submitted.toISOString();
+        submittedEl.textContent = submitted.toLocaleString("en-IN", {
+          day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit"
+        });
+      } else {
+        submittedEl.closest(".player-submitted-row").hidden = true;
+      }
+
+      const photoWrap = document.getElementById("playerPhotoWrap");
+      const initials = name.split(/\s+/).filter(Boolean).slice(0, 2)
+        .map((part) => part[0].toUpperCase()).join("");
+      document.getElementById("playerInitials").textContent = initials;
+      if (typeof data.photo === "string" && /^data:image\//.test(data.photo)) {
+        document.getElementById("playerPhoto").src = data.photo;
+        photoWrap.classList.add("has-photo");
+      }
+
+      document.getElementById("playerSummary").hidden = false;
+    })();
+  </script>
+</body>
+</html>

@@ -35,7 +35,11 @@ The page is intentionally designed as a tournament registration page, not as an 
   The same mobile number with a different name, or the same name with a different mobile, is allowed.
   This applies to submissions through the web app; direct Google Form submissions bypass the check.
 - Photo selection area is 10% smaller, with scrollable crop controls on short screens
-- Success message
+- Success page (`success.html`) in the same theme: after a confirmed registration the
+  browser is taken to a confirmation screen showing the player's photo, name, category,
+  masked mobile number and submission time, plus next steps (verification, auction, league)
+  and organizer contacts. The summary is passed via `sessionStorage` (nothing extra is sent
+  to the server); opening the page directly shows a generic confirmation instead
 - Failure message
 - Google Form submission through Apps Script
 - No paid server required
@@ -209,8 +213,8 @@ Expected flow:
 3. Apps Script receives the data.
 4. Apps Script creates a response in the Google Form.
 5. Google Form records the response.
-6. User returns to the website and sees:
-   "Registration submitted successfully. Thank you!"
+6. User is taken to the success page (`success.html`) with a
+   "You're registered!" confirmation and a summary of their registration.
 
 Also verify that a 9-digit number or a number containing non-digits is rejected,
 and that resubmitting the same name/mobile pair shows a duplicate error without
