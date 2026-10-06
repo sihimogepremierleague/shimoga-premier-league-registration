@@ -39,7 +39,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-echo-retry-safe";
+const DEPLOY_MARKER = "2026-10-06-fast-duplicate-index";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -59,6 +59,23 @@ const MAX_COMMENT_LENGTH = 250;
 // Script property prefix for submission ids that were saved, so a browser
 // retry after a lost response cannot register the same player twice.
 const SUBMISSION_KEY_PREFIX = "submission:";
+
+// Script property index of registered players, keyed by mobile number with a
+// JSON array of normalized names, so the duplicate check is a single property
+// read instead of a scan of every Form response.
+const REGISTRATION_KEY_PREFIX = "reg:";
+const REGISTRATION_INDEX_READY_KEY = "registrationIndexReady";
+
+// Drive folder id cached after the first lookup to avoid a Drive search on
+// every registration.
+const UPLOAD_FOLDER_ID_KEY = "uploadFolderId";
+
+// Kept well below the ~30 s point where Google's echo URL starts failing.
+const LOCK_WAIT_MS = 20000;
+
+const DUPLICATE_MESSAGE =
+  "A registration with this name and mobile number already exists. " +
+  "Please contact the organizers if you need to update it.";
 
 const EXPECTED_TITLES = [
   "Name",
@@ -157,8 +174,13 @@ function doGet(e) {
   }
 
   try {
-    diagnostics.recordedSubmissionIds = Object.keys(PropertiesService.getScriptProperties().getProperties())
+    const properties = PropertiesService.getScriptProperties();
+    const keys = Object.keys(properties.getProperties());
+    diagnostics.recordedSubmissionIds = keys
       .filter(function (key) { return key.indexOf(SUBMISSION_KEY_PREFIX) === 0; }).length;
+    diagnostics.registrationIndexReady = keys.indexOf(REGISTRATION_INDEX_READY_KEY) !== -1;
+    diagnostics.indexedMobileNumbers = keys
+      .filter(function (key) { return key.indexOf(REGISTRATION_KEY_PREFIX) === 0; }).length;
   } catch (err) {
     diagnostics.status = "error";
     diagnostics.propertiesError = err && err.message ? err.message : String(err);
@@ -199,15 +221,6 @@ function doPost(e) {
       throw new Error("Invalid submission id.");
     }
 
-    locked = lock.tryLock(30000);
-    if (!locked) {
-      return jsonResponse({
-        status: "error",
-        retryable: true,
-        message: "The registration service is busy. Please try again shortly."
-      });
-    }
-
     // A retry of a submission that was already saved (its response was lost
     // on the way back to the browser) must not create a second registration.
     if (submissionId && isSubmissionRecorded(submissionId)) {
@@ -231,10 +244,23 @@ function doPost(e) {
       );
     }
 
-    if (hasExistingRegistration(form, data.name, data.mobile)) {
-      throw new Error("A registration with this name and mobile number already exists. Please contact the organizers if you need to update it.");
+    if (!ensureRegistrationIndex(form, lock)) {
+      return busyResponse();
     }
 
+    // The index can only produce false positives (for example after an
+    // organizer deletes a response), so a hit is confirmed against the Form.
+    // That slow scan only runs for likely duplicates, never for new players.
+    let staleIndexEntry = false;
+    if (isIndexedRegistration(data.name, data.mobile)) {
+      if (hasExistingRegistration(form, data.name, data.mobile)) {
+        throw new Error(DUPLICATE_MESSAGE);
+      }
+      staleIndexEntry = true;
+    }
+
+    // Uploads run before taking the lock so concurrent registrations do not
+    // queue behind each other's Drive writes.
     const response = form.createResponse();
     const skipped = [];
     const filePrefix = buildFilePrefix(data);
@@ -248,8 +274,33 @@ function doPost(e) {
     addFileLink(response, form, "Display Photo", data.photo, filePrefix, savedFiles, skipped);
     addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
 
+    // Only the final checks and the submit are serialized, so the lock is
+    // held for about a second instead of the whole request.
+    locked = lock.tryLock(LOCK_WAIT_MS);
+    if (!locked) {
+      trashFiles(savedFiles);
+      return busyResponse();
+    }
+
+    if (submissionId && isSubmissionRecorded(submissionId)) {
+      trashFiles(savedFiles);
+      return jsonResponse({ status: "success", alreadyRecorded: true });
+    }
+
+    // A hit here that was not stale before the lock means the same player was
+    // registered concurrently by another request.
+    if (!staleIndexEntry && isIndexedRegistration(data.name, data.mobile)) {
+      throw new Error(DUPLICATE_MESSAGE);
+    }
+
     response.submit();
     submitted = true;
+
+    try {
+      indexRegistration(data.name, data.mobile);
+    } catch (err) {
+      console.error("Registration saved, but duplicate index was not updated: " + err);
+    }
 
     if (submissionId) {
       try {
@@ -295,6 +346,105 @@ function recordSubmission(id) {
 
 function normalizeRegistrationName(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function readIndexedNames(properties, mobile) {
+  const raw = properties.getProperty(REGISTRATION_KEY_PREFIX + mobile);
+  if (!raw) return [];
+  try {
+    const names = JSON.parse(raw);
+    return Array.isArray(names) ? names : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function isIndexedRegistration(name, mobile) {
+  const names = readIndexedNames(PropertiesService.getScriptProperties(), mobile);
+  return names.indexOf(normalizeRegistrationName(name)) !== -1;
+}
+
+function indexRegistration(name, mobile) {
+  const properties = PropertiesService.getScriptProperties();
+  const names = readIndexedNames(properties, mobile);
+  const normalized = normalizeRegistrationName(name);
+  if (names.indexOf(normalized) !== -1) return;
+  names.push(normalized);
+  properties.setProperty(REGISTRATION_KEY_PREFIX + mobile, JSON.stringify(names));
+}
+
+/**
+ * Builds the duplicate-check index from existing Form responses once. Returns
+ * false if the lock could not be taken. The index is built under the lock so
+ * it cannot miss a registration that is submitted at the same time.
+ */
+function ensureRegistrationIndex(form, lock) {
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(REGISTRATION_INDEX_READY_KEY)) return true;
+  if (!lock.tryLock(LOCK_WAIT_MS)) return false;
+  try {
+    if (!properties.getProperty(REGISTRATION_INDEX_READY_KEY)) {
+      buildRegistrationIndex(form, properties);
+    }
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function buildRegistrationIndex(form, properties) {
+  const nameItem = findItemByTitle(form, "Name");
+  const mobileItem = findItemByTitle(form, "Mobile Number");
+  const index = {};
+  if (nameItem && mobileItem) {
+    form.getResponses().forEach(function (response) {
+      const mobileAnswer = response.getResponseForItem(mobileItem);
+      const nameAnswer = response.getResponseForItem(nameItem);
+      if (!mobileAnswer || !nameAnswer) return;
+      const key = REGISTRATION_KEY_PREFIX + String(mobileAnswer.getResponse()).trim();
+      const name = normalizeRegistrationName(nameAnswer.getResponse());
+      const names = index[key] || (index[key] = []);
+      if (names.indexOf(name) === -1) names.push(name);
+    });
+  }
+
+  const values = {};
+  Object.keys(index).forEach(function (key) {
+    values[key] = JSON.stringify(index[key]);
+  });
+  values[REGISTRATION_INDEX_READY_KEY] = new Date().toISOString();
+  properties.setProperties(values);
+}
+
+/**
+ * Run this from the Apps Script editor after deploying, and again after
+ * deleting or editing Form responses, to rebuild the duplicate-check index.
+ * Running it before registrations open means no player waits for the
+ * one-time index build.
+ */
+function rebuildRegistrationIndex() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(LOCK_WAIT_MS);
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    Object.keys(properties.getProperties()).forEach(function (key) {
+      if (key.indexOf(REGISTRATION_KEY_PREFIX) === 0 || key === REGISTRATION_INDEX_READY_KEY) {
+        properties.deleteProperty(key);
+      }
+    });
+    buildRegistrationIndex(FormApp.openById(GOOGLE_FORM_ID), properties);
+    console.log("Registration index rebuilt.");
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function busyResponse() {
+  return jsonResponse({
+    status: "error",
+    retryable: true,
+    message: "The registration service is busy. Please try again shortly."
+  });
 }
 
 function hasExistingRegistration(form, name, mobile) {
@@ -445,13 +595,39 @@ function addFileLink(response, form, title, value, filePrefix, savedFiles, skipp
   }
 }
 
+// One folder lookup per execution; the id is also cached across executions.
+let uploadFolder = null;
+
 function getUploadFolder() {
+  if (uploadFolder) return uploadFolder;
+
   if (UPLOAD_FOLDER_ID) {
-    return DriveApp.getFolderById(UPLOAD_FOLDER_ID);
+    uploadFolder = DriveApp.getFolderById(UPLOAD_FOLDER_ID);
+    return uploadFolder;
+  }
+
+  const properties = PropertiesService.getScriptProperties();
+  const cachedId = properties.getProperty(UPLOAD_FOLDER_ID_KEY);
+  if (cachedId) {
+    try {
+      const cached = DriveApp.getFolderById(cachedId);
+      if (!cached.isTrashed()) {
+        uploadFolder = cached;
+        return uploadFolder;
+      }
+    } catch (err) {
+      // The cached folder was deleted; fall back to a search below.
+    }
   }
 
   const folders = DriveApp.getRootFolder().getFoldersByName(UPLOAD_FOLDER_NAME);
-  return folders.hasNext() ? folders.next() : DriveApp.getRootFolder().createFolder(UPLOAD_FOLDER_NAME);
+  uploadFolder = folders.hasNext() ? folders.next() : DriveApp.getRootFolder().createFolder(UPLOAD_FOLDER_NAME);
+  try {
+    properties.setProperty(UPLOAD_FOLDER_ID_KEY, uploadFolder.getId());
+  } catch (err) {
+    console.warn("Could not cache upload folder id: " + err);
+  }
+  return uploadFolder;
 }
 
 function trashFiles(files) {

@@ -287,6 +287,39 @@
       });
     }
 
+    // Phone photos of ID cards are often 2–3 MB; a 2000 px JPEG stays readable
+    // at a fraction of the size, which makes the upload much faster on mobile
+    // data. PDFs and images the browser cannot decode are sent unchanged.
+    const DOCUMENT_MAX_SIDE = 2000;
+    const DOCUMENT_JPEG_QUALITY = 0.85;
+    const DOCUMENT_COMPRESS_MIN_BYTES = 400 * 1024;
+
+    async function prepareDocumentDataUrl(file) {
+      if (!/^image\//.test(file.type) || file.type === "image/gif" || file.size < DOCUMENT_COMPRESS_MIN_BYTES) {
+        return readFileAsDataUrl(file);
+      }
+      let image;
+      try {
+        image = await loadImageFromFile(file);
+        const scale = Math.min(1, DOCUMENT_MAX_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", DOCUMENT_JPEG_QUALITY));
+        return readFileAsDataUrl(blob && blob.size < file.size ? blob : file);
+      } catch (error) {
+        console.warn("Could not compress document image, sending original:", error);
+        return readFileAsDataUrl(file);
+      } finally {
+        if (image) URL.revokeObjectURL(image.src);
+      }
+    }
+
     /* ---------- Date of birth & age ---------- */
 
     function startOfToday() {
@@ -777,6 +810,22 @@
 
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+    // Apps Script has a cold start of a few seconds after it has been idle.
+    // A cheap liveness GET while the user fills in the form means the real
+    // submission usually lands on a warm instance.
+    const WARM_UP_INTERVAL_MS = 60 * 1000;
+    let lastWarmUp = 0;
+
+    function warmUpService() {
+      if (isSubmitting || Date.now() - lastWarmUp < WARM_UP_INTERVAL_MS) return;
+      lastWarmUp = Date.now();
+      fetch(form.action, { method: "GET", cache: "no-store" }).catch(() => {});
+    }
+
+    warmUpService();
+    documentInput.addEventListener("change", warmUpService);
+    consentInputs.forEach((input) => input.addEventListener("change", warmUpService));
+
     function createSubmissionId() {
       if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
       const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -832,6 +881,11 @@
         });
         if (result && result.status === "success") return result;
         if (result && result.status === "error" && !result.retryable) return result;
+        // "Busy" means nothing was saved, so retry without a status check.
+        if (result && result.retryable) {
+          if (attempt === MAX_SUBMIT_ATTEMPTS) return result;
+          continue;
+        }
 
         submitProgressText.textContent = "Confirming your registration, please keep this page open…";
         if (await checkSubmission(payload.submissionId) === "success") return { status: "success" };
@@ -898,7 +952,7 @@
           mobile: form.elements.mobile.value.trim(),
           comment: form.elements.comment.value.trim(),
           photo: photoDataUrl,
-          document: await readFileAsDataUrl(documentFile)
+          document: await prepareDocumentDataUrl(documentFile)
         };
 
         submitProgressText.textContent = "Sending your registration. Please wait while your files are saved and registration completes.";

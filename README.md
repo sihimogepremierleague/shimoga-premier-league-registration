@@ -15,7 +15,9 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Age is auto-calculated from Date of Birth and shown read-only as
   `X years, Y days`; DOB cannot be in the future or more than 70 years ago
 - Display photo and document are limited to 3 MB each (checked in the browser
-  and again in Apps Script)
+  and again in Apps Script). Large document images (400 KB or more) are resized
+  in the browser to at most 2000 px and re-encoded as JPEG before upload; PDFs
+  are sent unchanged
 - Mobile-friendly photo cropper: drag to move, pinch / slider to zoom, rotate;
   the cropped photo is saved as a square JPEG of at most 800×800 px
 - Client-side validation
@@ -27,7 +29,9 @@ The page is intentionally designed as a tournament registration page, not as an 
   repeat submissions from the same page are blocked while a request is running
 - Duplicate registrations are rejected when both mobile number and name match an existing
   Google Form response (names ignore case and repeated/leading/trailing whitespace).
-  Apps Script uses a script lock around the check and submission to prevent concurrent duplicates.
+  The check uses a name/mobile index kept in Script Properties, so it does not slow down as
+  registrations grow. Uploads run outside the script lock; only the final duplicate check and
+  the Form submit are serialized, so concurrent registrations do not queue behind each other.
   The same mobile number with a different name, or the same name with a different mobile, is allowed.
   This applies to submissions through the web app; direct Google Form submissions bypass the check.
 - Photo selection area is 10% smaller, with scrollable crop controls on short screens
@@ -107,6 +111,11 @@ stay private. To use an existing folder instead, set `UPLOAD_FOLDER_ID` in
 change, then deploy a **new version**. The manifest is saved with each deployed
 version, so a permission change only takes effect after redeploying.
 
+Finally, select `rebuildRegistrationIndex` and click **Run**. This builds the
+duplicate-check index from the existing Form responses. If you skip it, the
+first registration after deployment builds the index instead and is slower.
+Run it again after deleting or editing responses in the Google Form.
+
 Copy the Web app URL.
 
 > **Redeploying after any code change:** editing `Code.gs` does *not* update the
@@ -133,7 +142,7 @@ Open the Web app `/exec` URL directly in a browser. It returns a fast liveness
 check that does not touch the Form or Drive:
 
 ```json
-{ "status": "ok", "deployedVersion": "2026-10-06-echo-retry-safe" }
+{ "status": "ok", "deployedVersion": "2026-10-06-fast-duplicate-index" }
 ```
 
 For the full configuration check, open `/exec?diagnostics=1`, for example:
@@ -141,7 +150,7 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-echo-retry-safe",
+  "deployedVersion": "2026-10-06-fast-duplicate-index",
   "timingsMs": { "openForm": 400, "readItems": 300, "readResponses": 900, "duplicateScan": 1200, "checkDrive": 500, "total": 3300 },
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
@@ -151,7 +160,9 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
   "uploadFolderExists": true,
   "driveAuthorized": true,
   "responseCount": 12,
-  "recordedSubmissionIds": 12
+  "recordedSubmissionIds": 12,
+  "registrationIndexReady": true,
+  "indexedMobileNumbers": 12
 }
 ```
 
@@ -170,8 +181,11 @@ Check that:
 - `status` is `ok`. A `status` of `error` usually means `GOOGLE_FORM_ID` is the
   published `1FAIpQLS...` id instead of the edit id.
 
-`timingsMs` shows where execution time goes; `duplicateScan` grows with the
-number of Form responses. Each submission id uses one script property
+`timingsMs` shows where execution time goes. `duplicateScan` grows with the
+number of Form responses, but registrations only run that scan to confirm a
+likely duplicate; new players are checked against the index. Check that
+`registrationIndexReady` is `true` (run `rebuildRegistrationIndex` if it is not).
+Each submission id and each indexed mobile number uses one script property
 (about 60 bytes of the 500 KB property quota, i.e. several thousand registrations).
 
 If you get a raw HTML error page instead of JSON, the script is throwing before
@@ -228,9 +242,14 @@ The website handles it:
    A resubmission of an already-saved id returns success without creating a
    second response or uploading files again.
 
-To keep executions short, the plain `/exec` health check no longer opens the
-Form or Drive, and the duplicate check reads only the Name and Mobile Number
-answers of each response.
+To keep executions short (and so make these lost responses rare):
+
+- the plain `/exec` health check does not open the Form or Drive;
+- the duplicate check reads a Script Properties index instead of every Form response;
+- the upload folder id is cached instead of searched for on every request;
+- uploads happen outside the script lock, which is held only for the final check and submit;
+- the page warms up the script with a liveness `GET` while the user fills in the form;
+- a "busy" reply is retried straight away without the status check.
 
 ## Troubleshooting CORS errors
 
