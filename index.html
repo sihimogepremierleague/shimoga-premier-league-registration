@@ -26,6 +26,23 @@
         <h2 id="form-title">Tell us about yourself</h2>
       </div>
 
+      <dl class="event-dates" aria-label="Key tournament dates">
+        <div class="event-date">
+          <span class="event-date-icon" aria-hidden="true">🔨</span>
+          <div>
+            <dt>Auction Date</dt>
+            <dd><time datetime="2026-11-15">15 Nov 2026</time></dd>
+          </div>
+        </div>
+        <div class="event-date">
+          <span class="event-date-icon" aria-hidden="true">🏸</span>
+          <div>
+            <dt>League Date</dt>
+            <dd><time datetime="2026-12-06">6 Dec 2026</time></dd>
+          </div>
+        </div>
+      </dl>
+
       <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
       <form id="registrationForm" method="POST"
@@ -57,7 +74,7 @@
           <div class="grid" style="flex: 1; width: 100%;">
             <label class="field field-full">
               <span>Name <b>*</b></span>
-              <input name="name" type="text" autocomplete="name" placeholder="Enter your full name" required>
+              <input name="name" type="text" autocomplete="name" maxlength="50" placeholder="Enter your full name" required>
             </label>
 
             <label class="field">
@@ -88,13 +105,16 @@
         <div class="grid">
           <label class="field field-full">
             <span>Mobile Number <b>*</b></span>
-            <input name="mobile" type="tel" inputmode="tel"
-                   placeholder="10-digit mobile number" required>
+            <input name="mobile" id="mobileInput" type="tel" inputmode="numeric"
+                   pattern="[0-9]{10}" minlength="10" maxlength="10" autocomplete="tel-national"
+                   placeholder="10-digit mobile number" required aria-describedby="mobileError">
+            <span class="field-error" id="mobileError" role="alert" hidden></span>
           </label>
 
           <label class="field field-full">
             <span>Comments </span>
-            <textarea name="comment" rows="4" placeholder="Achievements / experience / notes"></textarea>
+            <textarea name="comment" id="commentInput" rows="4" maxlength="250" placeholder="Where do you practice / Achievements / experience" aria-describedby="commentCount"></textarea>
+            <span class="field-hint char-count" id="commentCount">0 / 250</span>
           </label>
 
           <label class="field field-full">
@@ -109,16 +129,20 @@
           <legend>Declaration <b>*</b></legend>
           <label class="consent">
             <input type="checkbox" id="aadhaarConsent" aria-required="true">
-            <span>All the details i submitted are valid including Aadhaar. I agree to verify it, if required.</span>
+            <span>I confirm that all information submitted, including my Aadhaar, is authentic and valid. I consent to any further verification process if necessary.</span>
           </label>
           <label class="consent">
             <input type="checkbox" id="feeConsent" aria-required="true">
-            <span>I agree to pay ₹1,000 to the owner as the registration fee.</span>
+            <span>I agree to pay a registration fee of ₹1,000 to the team owner if I am selected for the team.</span>
           </label>
         </fieldset>
 
         <p class="note">By submitting, you are providing these details to the tournament organizers for registration purposes.</p>
         <p class="submit-hint" id="submitHint">Tick both declarations above to submit.</p>
+        <div id="submitProgress" class="submit-progress" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="submitProgressText"></span>
+        </div>
         <button class="submit" type="submit" disabled aria-describedby="submitHint">
           <span>Submit Registration</span>
           <span class="arrow">→</span>
@@ -175,6 +199,8 @@
     const form = document.getElementById("registrationForm");
     const statusBox = document.getElementById("status");
     const submitButton = form.querySelector(".submit");
+    const submitProgress = document.getElementById("submitProgress");
+    const submitProgressText = document.getElementById("submitProgressText");
     const photoInput = document.getElementById("photoInput");
     const photoBox = document.getElementById("photoBox");
     const photoPreview = document.getElementById("photoPreview");
@@ -185,6 +211,8 @@
     const dobInput = document.getElementById("dobInput");
     const dobError = document.getElementById("dobError");
     const ageInput = document.getElementById("ageInput");
+    const mobileInput = document.getElementById("mobileInput");
+    const mobileError = document.getElementById("mobileError");
     const documentInput = document.getElementById("documentInput");
     const documentError = document.getElementById("documentError");
     const cropModal = document.getElementById("cropModal");
@@ -208,6 +236,7 @@
     const params = new URLSearchParams(window.location.search);
     const result = params.get("status");
     let photoDataUrl = "";
+    let isSubmitting = false;
 
     function showStatus(type, message) {
       statusBox.hidden = false;
@@ -220,6 +249,26 @@
       element.textContent = message || "";
       element.hidden = !message;
     }
+
+    function validateMobile() {
+      const message = /^[0-9]{10}$/.test(mobileInput.value)
+        ? "" : "Please enter exactly 10 digits for your mobile number.";
+      mobileInput.setCustomValidity(message);
+      setFieldError(mobileError, message);
+      return !message;
+    }
+
+    mobileInput.addEventListener("input", validateMobile);
+    mobileInput.addEventListener("blur", validateMobile);
+
+    const commentInput = document.getElementById("commentInput");
+    const commentCount = document.getElementById("commentCount");
+
+    function updateCommentCount() {
+      commentCount.textContent = commentInput.value.length + " / " + commentInput.maxLength;
+    }
+
+    commentInput.addEventListener("input", updateCommentCount);
 
     function formatFileSize(bytes) {
       return (bytes / (1024 * 1024)).toFixed(1) + " MB";
@@ -492,7 +541,7 @@
     function layoutCropStage() {
       const rect = cropStage.getBoundingClientRect();
       const gutter = rect.width < 480 ? 24 : 48;
-      cropper.frameSize = Math.max(120, Math.min(rect.width, rect.height) - gutter);
+      cropper.frameSize = Math.max(1, Math.min(rect.width, rect.height) - gutter);
       cropFrame.style.width = cropper.frameSize + "px";
       cropFrame.style.height = cropper.frameSize + "px";
       drawCropPreview();
@@ -685,7 +734,7 @@
 
     function updateSubmitState() {
       const accepted = consentsAccepted();
-      submitButton.disabled = !accepted;
+      submitButton.disabled = isSubmitting || !accepted;
       submitHint.hidden = accepted;
     }
 
@@ -698,9 +747,12 @@
 
     function resetFormState() {
       form.reset();
+      updateCommentCount();
       clearPhotoPreview();
       ageInput.value = "";
       dobInput.setCustomValidity("");
+      mobileInput.setCustomValidity("");
+      setFieldError(mobileError, "");
       setFieldError(dobError, "");
       setFieldError(documentError, "");
       setFieldError(photoError, "");
@@ -726,6 +778,7 @@
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (isSubmitting) return;
 
       if (!consentsAccepted()) {
         updateSubmitState();
@@ -739,6 +792,7 @@
       }
 
       const age = updateAgeFromDob(true);
+      validateMobile();
 
       if (!form.checkValidity()) {
         form.reportValidity();
@@ -758,7 +812,12 @@
         return;
       }
 
-      submitButton.disabled = true;
+      isSubmitting = true;
+      updateSubmitState();
+      form.setAttribute("aria-busy", "true");
+      statusBox.hidden = true;
+      submitProgress.hidden = false;
+      submitProgressText.textContent = "Preparing your registration and document...";
       submitButton.querySelector("span:first-child").textContent = "Submitting…";
 
       try {
@@ -773,6 +832,7 @@
           document: await readFileAsDataUrl(documentFile)
         };
 
+        submitProgressText.textContent = "Sending your registration. Please wait while your files are saved and registration completes.";
         // text/plain keeps this a CORS "simple request" so the browser does not
         // send a preflight OPTIONS, which Apps Script web apps cannot answer.
         const response = await fetch(form.action, {
@@ -808,6 +868,9 @@
           : error.message;
         showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (9740603178/9900550930)");
       } finally {
+        isSubmitting = false;
+        form.removeAttribute("aria-busy");
+        submitProgress.hidden = true;
         submitButton.querySelector("span:first-child").textContent = "Submit Registration";
         updateSubmitState();
       }

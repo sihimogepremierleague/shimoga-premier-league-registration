@@ -91,8 +91,58 @@ h1 {
 
 .card-head h2 {
   margin: 12px 0 7px;
+  padding-bottom: 8px;
   font-size: clamp(25px, 4vw, 34px);
   letter-spacing: -.035em;
+}
+
+.event-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0 0 22px;
+}
+
+.event-date {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--gold);
+  border-radius: 13px;
+  background: linear-gradient(145deg, #f6faf7, #edf6f2);
+}
+
+.event-date-icon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--green);
+  font-size: 18px;
+}
+
+.event-date dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.event-date dd {
+  margin: 3px 0 0;
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+}
+
+.char-count {
+  text-align: right;
 }
 
 .card-head p {
@@ -410,6 +460,36 @@ input[type="file"] {
 .submit:hover:not(:disabled) { background: #164c3e; transform: translateY(-1px); }
 .submit:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 
+.submit-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  color: var(--green);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.submit-progress[hidden] { display: none; }
+
+.spinner {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--line);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
 .consents {
   margin: 22px 0 0;
   padding: 0;
@@ -529,10 +609,11 @@ body.modal-open {
   border-radius: 24px;
   box-shadow: 0 30px 80px rgba(0,0,0,.28);
   padding: 18px;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .crop-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -560,9 +641,10 @@ body.modal-open {
 
 .crop-stage {
   position: relative;
-  width: 100%;
-  height: min(420px, 60vh);
-  min-height: 240px;
+  width: 90%;
+  align-self: center;
+  height: min(378px, 54vh);
+  min-height: 216px;
   border-radius: 18px;
   overflow: hidden;
   background: #111a17;
@@ -611,6 +693,7 @@ body.modal-open {
 }
 
 .crop-hint {
+  flex-shrink: 0;
   margin: 10px 0 0;
   text-align: center;
   color: var(--muted);
@@ -618,6 +701,7 @@ body.modal-open {
 }
 
 .crop-controls {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -711,6 +795,12 @@ body.modal-open {
   .grid { grid-template-columns: 1fr; gap: 14px; }
   .field-full { grid-column: auto; }
   .card { padding: 20px 17px; }
+  .card-head h2 { margin: 2px 0 4px; padding-bottom: 6px; font-size: 20px; }
+  .event-dates { gap: 8px; margin-bottom: 14px; }
+  .event-date { padding: 7px 10px; border-radius: 11px; }
+  .event-date-icon { display: none; }
+  .event-date dt { font-size: 9px; letter-spacing: .08em; }
+  .event-date dd { margin-top: 1px; font-size: 13px; white-space: nowrap; }
   .photo-toolbar {
     right: 8px;
     bottom: 8px;
@@ -731,9 +821,9 @@ body.modal-open {
     padding: max(12px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
   }
   .crop-stage {
-    flex: 1;
+    flex: .9;
     height: auto;
-    min-height: 200px;
+    min-height: 180px;
   }
   .submit {
     padding: 16px 18px;

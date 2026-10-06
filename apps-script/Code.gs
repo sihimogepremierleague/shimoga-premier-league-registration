@@ -39,7 +39,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-upload-size-limit";
+const DEPLOY_MARKER = "2026-10-06-field-length-limits";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -51,6 +51,10 @@ const FILE_LINK_TITLES = ["Display Photo", "Document"];
 
 // Matches the 3 MB limit enforced by the website.
 const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+
+// Match the maxlength limits on the website.
+const MAX_NAME_LENGTH = 50;
+const MAX_COMMENT_LENGTH = 250;
 
 const EXPECTED_TITLES = [
   "Name",
@@ -116,9 +120,32 @@ function doGet() {
 
 function doPost(e) {
   const savedFiles = [];
+  const lock = LockService.getScriptLock();
+  let locked = false;
 
   try {
     const data = parseRequestPayload(e);
+    if (!data || typeof data.name !== "string" || !data.name.trim()) {
+      throw new Error("Please enter your name.");
+    }
+    if (typeof data.mobile !== "string" || !/^[0-9]{10}$/.test(data.mobile)) {
+      throw new Error("Please enter exactly 10 digits for your mobile number.");
+    }
+    data.name = data.name.trim().replace(/\s+/g, " ");
+    if (data.name.length > MAX_NAME_LENGTH) {
+      throw new Error("Name must be " + MAX_NAME_LENGTH + " characters or fewer.");
+    }
+    if (data.comment != null && typeof data.comment !== "string") {
+      throw new Error("Comments must be text.");
+    }
+    data.comment = (data.comment || "").trim();
+    if (data.comment.length > MAX_COMMENT_LENGTH) {
+      throw new Error("Comments must be " + MAX_COMMENT_LENGTH + " characters or fewer.");
+    }
+    locked = lock.tryLock(30000);
+    if (!locked) {
+      throw new Error("The registration service is busy. Please try again shortly.");
+    }
     const form = FormApp.openById(GOOGLE_FORM_ID);
     const missing = findMissingTitles(form);
     if (missing.length) {
@@ -134,6 +161,10 @@ function doPost(e) {
         "Change these Google Form questions to Short answer so file links can be stored: " +
         wrongType.join(", ")
       );
+    }
+
+    if (hasExistingRegistration(form, data.name, data.mobile)) {
+      throw new Error("A registration with this name and mobile number already exists. Please contact the organizers if you need to update it.");
     }
 
     const response = form.createResponse();
@@ -163,7 +194,27 @@ function doPost(e) {
       status: "error",
       message: err && err.message ? err.message : String(err)
     });
+  } finally {
+    if (locked) lock.releaseLock();
   }
+}
+
+function normalizeRegistrationName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function hasExistingRegistration(form, name, mobile) {
+  const normalizedName = normalizeRegistrationName(name);
+  return form.getResponses().some(function (response) {
+    let existingName = "";
+    let existingMobile = "";
+    response.getItemResponses().forEach(function (answer) {
+      const title = answer.getItem().getTitle().trim().toLowerCase();
+      if (title === "name") existingName = normalizeRegistrationName(answer.getResponse());
+      if (title === "mobile number") existingMobile = String(answer.getResponse()).trim();
+    });
+    return existingName === normalizedName && existingMobile === mobile;
+  });
 }
 
 /**

@@ -19,6 +19,18 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Mobile-friendly photo cropper: drag to move, pinch / slider to zoom, rotate;
   the cropped photo is saved as a square JPEG of at most 800×800 px
 - Client-side validation
+- Name is limited to 50 characters and Comments to 250 characters (with a live
+  counter), enforced in the browser and Apps Script
+- Auction Date (15 Nov 2026) and League Date (6 Dec 2026) shown at the top of the form
+- Mobile numbers must contain exactly 10 digits, validated in the browser and Apps Script
+- A spinner and preparation/submission status remain visible until registration succeeds or fails;
+  repeat submissions from the same page are blocked while a request is running
+- Duplicate registrations are rejected when both mobile number and name match an existing
+  Google Form response (names ignore case and repeated/leading/trailing whitespace).
+  Apps Script uses a script lock around the check and submission to prevent concurrent duplicates.
+  The same mobile number with a different name, or the same name with a different mobile, is allowed.
+  This applies to submissions through the web app; direct Google Form submissions bypass the check.
+- Photo selection area is 10% smaller, with scrollable crop controls on short screens
 - Success message
 - Failure message
 - Google Form submission through Apps Script
@@ -123,7 +135,7 @@ health check, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-drive-auth-check",
+  "deployedVersion": "2026-10-06-field-length-limits",
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
   "missingTitles": [],
@@ -155,6 +167,12 @@ website as `TypeError: Failed to fetch`.
 
 ## 6. Test before publishing
 
+Run the local backend regression tests with Node.js (no packages required):
+
+```sh
+node --test tests/registration.test.cjs
+```
+
 Open the website and submit a test registration.
 
 Expected flow:
@@ -166,6 +184,13 @@ Expected flow:
 5. Google Form records the response.
 6. User returns to the website and sees:
    "Registration submitted successfully. Thank you!"
+
+Also verify that a 9-digit number or a number containing non-digits is rejected,
+and that resubmitting the same name/mobile pair shows a duplicate error without
+saving more files or another response. Check the photo dialog on a short phone
+screen: scroll within the dialog if needed to reach Cancel and Use this photo.
+Deploy a **new Apps Script version** for mobile validation and duplicate protection
+to take effect; publishing the static website alone does not update the backend.
 
 If anything fails, the user is returned with a generic failure message.
 
