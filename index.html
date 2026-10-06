@@ -771,6 +771,74 @@
 
     /* ---------- Submit ---------- */
 
+    const MAX_SUBMIT_ATTEMPTS = 3;
+    const STATUS_CHECK_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 3000;
+
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function createSubmissionId() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    // Returns the parsed JSON body, or null when the outcome is unknown.
+    // Apps Script serves results through a second redirect URL that Google
+    // sometimes answers with a 404 page or a redirect back to doGet, even
+    // after the script has finished; callers must confirm before retrying.
+    async function callService(url, options) {
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (error) {
+        console.warn("Registration service request failed:", error);
+        return null;
+      }
+      const rawBody = await response.text().catch(() => "");
+      try {
+        const body = JSON.parse(rawBody);
+        return response.ok && body && typeof body === "object" ? body : null;
+      } catch (parseError) {
+        console.warn("Unexpected response from registration service (HTTP " + response.status + "):", rawBody.slice(0, 200));
+        return null;
+      }
+    }
+
+    async function checkSubmission(submissionId) {
+      const url = form.action + "?submissionId=" + encodeURIComponent(submissionId);
+      for (let attempt = 0; attempt < STATUS_CHECK_ATTEMPTS; attempt++) {
+        if (attempt) await delay(RETRY_DELAY_MS);
+        const body = await callService(url, { method: "GET", cache: "no-store" });
+        if (body && (body.status === "success" || body.status === "not_found")) return body.status;
+      }
+      return null;
+    }
+
+    // Resubmitting is safe: the backend ignores a submissionId it already saved.
+    async function submitRegistration(payload) {
+      const body = JSON.stringify(payload);
+      for (let attempt = 1; attempt <= MAX_SUBMIT_ATTEMPTS; attempt++) {
+        if (attempt > 1) {
+          submitProgressText.textContent = "Still working on it. Retrying your registration, please keep this page open…";
+          await delay(RETRY_DELAY_MS);
+        }
+        // text/plain keeps this a CORS "simple request" so the browser does not
+        // send a preflight OPTIONS, which Apps Script web apps cannot answer.
+        const result = await callService(form.action, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: body
+        });
+        if (result && result.status === "success") return result;
+        if (result && result.status === "error" && !result.retryable) return result;
+
+        submitProgressText.textContent = "Confirming your registration, please keep this page open…";
+        if (await checkSubmission(payload.submissionId) === "success") return { status: "success" };
+      }
+      return null;
+    }
+
     function focusProblem(element) {
       element.scrollIntoView({ behavior: "smooth", block: "center" });
       element.focus({ preventScroll: true });
@@ -822,6 +890,7 @@
 
       try {
         const payload = {
+          submissionId: createSubmissionId(),
           name: form.elements.name.value.trim(),
           age: age,
           dob: dobInput.value,
@@ -833,40 +902,19 @@
         };
 
         submitProgressText.textContent = "Sending your registration. Please wait while your files are saved and registration completes.";
-        // text/plain keeps this a CORS "simple request" so the browser does not
-        // send a preflight OPTIONS, which Apps Script web apps cannot answer.
-        const response = await fetch(form.action, {
-          method: "POST",
-          headers: {
-            "Content-Type": "text/plain;charset=utf-8"
-          },
-          body: JSON.stringify(payload)
-        });
+        const resultBody = await submitRegistration(payload);
 
-        const rawBody = await response.text();
-        let resultBody = {};
-        try {
-          resultBody = JSON.parse(rawBody);
-        } catch (parseError) {
-          // A non-JSON body means Apps Script returned an error or sign-in page
-          // instead of running the script.
-          console.error("Non-JSON response from Apps Script:", rawBody.slice(0, 500));
-          throw new Error("The registration service returned an unexpected response. It may need to be redeployed.");
-        }
-
-        if (response.ok && resultBody.status === "success") {
+        if (resultBody && resultBody.status === "success") {
           showStatus("success", "Registration submitted successfully. Thank you!");
           resetFormState();
+        } else if (resultBody) {
+          throw new Error(resultBody.message || "Submission failed.");
         } else {
-          throw new Error(resultBody.message || "Submission failed");
+          throw new Error("We could not confirm whether your registration was saved. Please wait a few minutes before trying again.");
         }
       } catch (error) {
         console.error(error);
-        const isNetworkFailure = error instanceof TypeError;
-        const detail = isNetworkFailure
-          ? "Could not reach the registration service."
-          : error.message;
-        showStatus("error", "We could not complete the registration. " + detail + " Please try again. Still facing issue contact admin (9740603178/9900550930)");
+        showStatus("error", "We could not complete the registration. " + error.message + " Still facing issue contact admin (9740603178/9900550930)");
       } finally {
         isSubmitting = false;
         form.removeAttribute("aria-busy");

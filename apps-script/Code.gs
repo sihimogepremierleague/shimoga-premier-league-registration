@@ -39,7 +39,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-field-length-limits";
+const DEPLOY_MARKER = "2026-10-06-echo-retry-safe";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -56,6 +56,10 @@ const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
 const MAX_NAME_LENGTH = 50;
 const MAX_COMMENT_LENGTH = 250;
 
+// Script property prefix for submission ids that were saved, so a browser
+// retry after a lost response cannot register the same player twice.
+const SUBMISSION_KEY_PREFIX = "submission:";
+
 const EXPECTED_TITLES = [
   "Name",
   "Age",
@@ -68,29 +72,64 @@ const EXPECTED_TITLES = [
 ];
 
 /**
- * Health check. Open the /exec URL directly in a browser after deploying.
- * Reports the deployed code version, whether GOOGLE_FORM_ID can be opened,
- * and which expected question titles are present or missing.
+ * GET handler.
+ *   /exec                      -> fast liveness check (no Form/Drive access)
+ *   /exec?diagnostics=1        -> full configuration check with timings
+ *   /exec?submissionId=<id>    -> whether that submission was recorded
+ *
+ * The plain /exec check is kept cheap because Apps Script sometimes redirects
+ * a POST's output URL back to /exec as a GET; a slow doGet makes that worse.
  */
-function doGet() {
-  const diagnostics = { status: "ok", deployedVersion: DEPLOY_MARKER };
+function doGet(e) {
+  const params = (e && e.parameter) || {};
+
+  if (params.submissionId) {
+    const id = String(params.submissionId);
+    if (!isValidSubmissionId(id)) {
+      return jsonResponse({ status: "error", message: "Invalid submission id." });
+    }
+    return jsonResponse({
+      status: isSubmissionRecorded(id) ? "success" : "not_found",
+      submissionId: id
+    });
+  }
+
+  if (!params.diagnostics) {
+    return jsonResponse({ status: "ok", deployedVersion: DEPLOY_MARKER });
+  }
+
+  const started = Date.now();
+  const timingsMs = {};
+  const diagnostics = { status: "ok", deployedVersion: DEPLOY_MARKER, timingsMs: timingsMs };
 
   try {
+    let t = Date.now();
     const form = FormApp.openById(GOOGLE_FORM_ID);
-    const items = form.getItems().map(function (item) {
-      return { title: item.getTitle(), type: String(item.getType()) };
+    timingsMs.openForm = Date.now() - t;
+
+    t = Date.now();
+    const index = getItemIndex(form);
+    const items = index.all.map(function (entry) {
+      return { title: entry.title, type: String(entry.type) };
     });
-    const titles = items.map(function (item) {
-      return item.title.trim().toLowerCase();
-    });
+    timingsMs.readItems = Date.now() - t;
 
     diagnostics.formTitle = form.getTitle();
     diagnostics.items = items;
-    diagnostics.missingTitles = EXPECTED_TITLES.filter(function (title) {
-      return titles.indexOf(title.toLowerCase()) === -1;
-    });
+    diagnostics.missingTitles = findMissingTitles(form);
     diagnostics.wrongTypeTitles = findWrongTypeFileLinkTitles(form);
     diagnostics.acceptsResponses = form.isAcceptingResponses();
+
+    t = Date.now();
+    diagnostics.responseCount = form.getResponses().length;
+    timingsMs.readResponses = Date.now() - t;
+
+    if (!diagnostics.missingTitles.length) {
+      t = Date.now();
+      hasExistingRegistration(form, "__diagnostics__", "0000000000");
+      timingsMs.duplicateScan = Date.now() - t;
+    }
+
     if (diagnostics.missingTitles.length || diagnostics.wrongTypeTitles.length) {
       diagnostics.status = "error";
     }
@@ -103,9 +142,11 @@ function doGet() {
   }
 
   try {
+    const t = Date.now();
     diagnostics.uploadFolderExists = UPLOAD_FOLDER_ID
       ? Boolean(DriveApp.getFolderById(UPLOAD_FOLDER_ID))
       : DriveApp.getRootFolder().getFoldersByName(UPLOAD_FOLDER_NAME).hasNext();
+    timingsMs.checkDrive = Date.now() - t;
     diagnostics.driveAuthorized = true;
   } catch (err) {
     diagnostics.status = "error";
@@ -115,6 +156,15 @@ function doGet() {
       "accept the Google Drive permission prompt as the deployment owner.";
   }
 
+  try {
+    diagnostics.recordedSubmissionIds = Object.keys(PropertiesService.getScriptProperties().getProperties())
+      .filter(function (key) { return key.indexOf(SUBMISSION_KEY_PREFIX) === 0; }).length;
+  } catch (err) {
+    diagnostics.status = "error";
+    diagnostics.propertiesError = err && err.message ? err.message : String(err);
+  }
+
+  timingsMs.total = Date.now() - started;
   return jsonResponse(diagnostics);
 }
 
@@ -122,6 +172,8 @@ function doPost(e) {
   const savedFiles = [];
   const lock = LockService.getScriptLock();
   let locked = false;
+  let submitted = false;
+  const started = Date.now();
 
   try {
     const data = parseRequestPayload(e);
@@ -142,10 +194,26 @@ function doPost(e) {
     if (data.comment.length > MAX_COMMENT_LENGTH) {
       throw new Error("Comments must be " + MAX_COMMENT_LENGTH + " characters or fewer.");
     }
+    const submissionId = data.submissionId == null ? "" : String(data.submissionId);
+    if (submissionId && !isValidSubmissionId(submissionId)) {
+      throw new Error("Invalid submission id.");
+    }
+
     locked = lock.tryLock(30000);
     if (!locked) {
-      throw new Error("The registration service is busy. Please try again shortly.");
+      return jsonResponse({
+        status: "error",
+        retryable: true,
+        message: "The registration service is busy. Please try again shortly."
+      });
     }
+
+    // A retry of a submission that was already saved (its response was lost
+    // on the way back to the browser) must not create a second registration.
+    if (submissionId && isSubmissionRecorded(submissionId)) {
+      return jsonResponse({ status: "success", alreadyRecorded: true });
+    }
+
     const form = FormApp.openById(GOOGLE_FORM_ID);
     const missing = findMissingTitles(form);
     if (missing.length) {
@@ -181,14 +249,28 @@ function doPost(e) {
     addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
 
     response.submit();
+    submitted = true;
+
+    if (submissionId) {
+      try {
+        recordSubmission(submissionId);
+      } catch (err) {
+        console.error("Registration saved, but submission id was not recorded: " + err);
+      }
+    }
 
     if (skipped.length) {
       console.warn("Submitted, but these values had no matching form item: " + skipped.join(", "));
     }
 
+    console.log("Registration saved in " + (Date.now() - started) + " ms");
     return jsonResponse({ status: "success", skippedFields: skipped });
   } catch (err) {
     console.error(err);
+    if (submitted) {
+      // The Form response exists and links to these files; keep them.
+      return jsonResponse({ status: "success" });
+    }
     trashFiles(savedFiles);
     return jsonResponse({
       status: "error",
@@ -199,21 +281,33 @@ function doPost(e) {
   }
 }
 
+function isValidSubmissionId(id) {
+  return /^[A-Za-z0-9-]{8,64}$/.test(id);
+}
+
+function isSubmissionRecorded(id) {
+  return PropertiesService.getScriptProperties().getProperty(SUBMISSION_KEY_PREFIX + id) !== null;
+}
+
+function recordSubmission(id) {
+  PropertiesService.getScriptProperties().setProperty(SUBMISSION_KEY_PREFIX + id, new Date().toISOString());
+}
+
 function normalizeRegistrationName(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function hasExistingRegistration(form, name, mobile) {
+  const nameItem = findItemByTitle(form, "Name");
+  const mobileItem = findItemByTitle(form, "Mobile Number");
+  if (!nameItem || !mobileItem) return false;
+
   const normalizedName = normalizeRegistrationName(name);
   return form.getResponses().some(function (response) {
-    let existingName = "";
-    let existingMobile = "";
-    response.getItemResponses().forEach(function (answer) {
-      const title = answer.getItem().getTitle().trim().toLowerCase();
-      if (title === "name") existingName = normalizeRegistrationName(answer.getResponse());
-      if (title === "mobile number") existingMobile = String(answer.getResponse()).trim();
-    });
-    return existingName === normalizedName && existingMobile === mobile;
+    const mobileAnswer = response.getResponseForItem(mobileItem);
+    if (!mobileAnswer || String(mobileAnswer.getResponse()).trim() !== mobile) return false;
+    const nameAnswer = response.getResponseForItem(nameItem);
+    return Boolean(nameAnswer) && normalizeRegistrationName(nameAnswer.getResponse()) === normalizedName;
   });
 }
 
@@ -236,11 +330,9 @@ function findWrongTypeFileLinkTitles(form) {
 }
 
 function findMissingTitles(form) {
-  const titles = form.getItems().map(function (item) {
-    return item.getTitle().trim().toLowerCase();
-  });
+  const index = getItemIndex(form);
   return EXPECTED_TITLES.filter(function (title) {
-    return titles.indexOf(title.toLowerCase()) === -1;
+    return !index.byTitle[title.toLowerCase()];
   });
 }
 
@@ -404,14 +496,36 @@ function getFileExtensionFromMime(mimeType) {
   return extensions[mimeType] || "";
 }
 
+// Every Form API call is a remote round trip, so read the items once per
+// request instead of calling getItems()/getTitle() for each lookup.
+const itemIndexCache = new WeakMap();
+
+function getItemIndex(form) {
+  let index = itemIndexCache.get(form);
+  if (index) return index;
+
+  index = { all: [], byTitle: {} };
+  form.getItems().forEach(function (item) {
+    const entry = { item: item, title: item.getTitle(), type: item.getType() };
+    const key = entry.title.trim().toLowerCase();
+    index.all.push(entry);
+    (index.byTitle[key] = index.byTitle[key] || []).push(entry);
+  });
+  itemIndexCache.set(form, index);
+  return index;
+}
+
 function findItem(form, title, type) {
-  const items = form.getItems(type);
-  for (let i = 0; i < items.length; i++) {
-    if (items[i].getTitle().trim().toLowerCase() === title.trim().toLowerCase()) {
-      return items[i];
-    }
+  const entries = getItemIndex(form).byTitle[title.trim().toLowerCase()] || [];
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].type === type) return entries[i].item;
   }
   return null;
+}
+
+function findItemByTitle(form, title) {
+  const entries = getItemIndex(form).byTitle[title.trim().toLowerCase()];
+  return entries ? entries[0].item : null;
 }
 
 function jsonResponse(payload) {

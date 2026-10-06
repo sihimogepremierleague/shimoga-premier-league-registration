@@ -6,8 +6,9 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "../apps-script/Code.gs"), "utf8");
 
-function createService({ lockAvailable = true, failSubmit = false } = {}) {
+function createService({ lockAvailable = true, failSubmit = false, failRecord = false } = {}) {
   const responses = [];
+  const properties = {};
   const files = [];
   const events = [];
   const types = { TEXT: "TEXT", PARAGRAPH_TEXT: "PARAGRAPH_TEXT", DATE: "DATE", LIST: "LIST", MULTIPLE_CHOICE: "MULTIPLE_CHOICE" };
@@ -23,6 +24,8 @@ function createService({ lockAvailable = true, failSubmit = false } = {}) {
     return item;
   });
   const form = {
+    getTitle: () => "SPL Registration",
+    isAcceptingResponses: () => true,
     getItems: (type) => items.filter((item) => !type || item.getType() === type),
     getResponses: () => {
       events.push("check");
@@ -36,6 +39,7 @@ function createService({ lockAvailable = true, failSubmit = false } = {}) {
           return response;
         },
         getItemResponses: () => answers,
+        getResponseForItem: (item) => answers.find((answer) => answer.getItem() === item) || null,
         submit: () => {
           events.push("submit");
           if (failSubmit) throw new Error("Save failed");
@@ -58,8 +62,18 @@ function createService({ lockAvailable = true, failSubmit = false } = {}) {
     }
   };
   const context = vm.createContext({
-    console: { error() {}, warn() {} },
-    FormApp: { openById: () => form, ItemType: types },
+    console: { error() {}, warn() {}, log() {} },
+    FormApp: { openById: () => { events.push("open"); return form; }, ItemType: types },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => (key in properties ? properties[key] : null),
+        getProperties: () => ({ ...properties }),
+        setProperty: (key, value) => {
+          if (failRecord) throw new Error("Properties unavailable");
+          properties[key] = value;
+        }
+      })
+    },
     LockService: {
       getScriptLock: () => ({
         tryLock: () => { events.push("lock"); return lockAvailable; },
@@ -79,8 +93,9 @@ function createService({ lockAvailable = true, failSubmit = false } = {}) {
   });
   vm.runInContext(source, context);
   return {
-    files, responses, events,
-    post: (data) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(data) } }).text)
+    files, responses, events, properties,
+    post: (data) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(data) } }).text),
+    get: (parameter) => JSON.parse(context.doGet({ parameter }).text)
   };
 }
 
@@ -135,7 +150,7 @@ test("normalized name and mobile pair is unique against existing responses", () 
   assert.match(duplicate.message, /already exists/);
   assert.equal(service.responses.length, 1);
   assert.equal(service.files.length, 2);
-  assert.deepEqual(service.events, ["lock", "check", "upload", "upload", "submit", "release", "lock", "check", "release"]);
+  assert.deepEqual(service.events, ["lock", "open", "check", "upload", "upload", "submit", "release", "lock", "open", "check", "release"]);
 });
 
 test("same mobile with another name and same name with another mobile are allowed", () => {
@@ -160,4 +175,81 @@ test("failed submission cleans up files and releases lock", () => {
   assert.equal(service.files.length, 2);
   assert.ok(service.files.every((file) => file.trashed));
   assert.equal(service.events.at(-1), "release");
+});
+
+test("retrying a saved submissionId succeeds without another response or upload", () => {
+  const service = createService();
+  const data = { ...payload, submissionId: "4f7c2a8e-1b2c-4d5e-8f90-123456789abc" };
+  assert.equal(service.post(data).status, "success");
+  const eventsAfterFirst = service.events.length;
+  const retry = service.post(data);
+  assert.equal(retry.status, "success");
+  assert.equal(retry.alreadyRecorded, true);
+  assert.equal(service.responses.length, 1);
+  assert.equal(service.files.length, 2);
+  assert.deepEqual(service.events.slice(eventsAfterFirst), ["lock", "release"]);
+});
+
+test("a new submissionId for the same player is still rejected as a duplicate", () => {
+  const service = createService();
+  assert.equal(service.post({ ...payload, submissionId: "aaaaaaaa-1111" }).status, "success");
+  const second = service.post({ ...payload, submissionId: "bbbbbbbb-2222" });
+  assert.equal(second.status, "error");
+  assert.match(second.message, /already exists/);
+  assert.equal(service.responses.length, 1);
+});
+
+test("invalid submissionIds are rejected before any writes", () => {
+  for (const submissionId of ["short", "has space 12345", "x".repeat(65), "<script>alert(1)</script>"]) {
+    const service = createService();
+    assert.equal(service.post({ ...payload, submissionId }).status, "error");
+    assert.deepEqual(service.events, []);
+  }
+});
+
+test("submission status lookup reports recorded ids without opening the form", () => {
+  const service = createService();
+  const submissionId = "cccccccc-3333";
+  assert.equal(service.get({ submissionId }).status, "not_found");
+  service.post({ ...payload, submissionId });
+  const eventsBefore = service.events.length;
+  assert.deepEqual(service.get({ submissionId }), { status: "success", submissionId });
+  assert.equal(service.get({ submissionId: "bad id" }).status, "error");
+  assert.equal(service.events.length, eventsBefore);
+});
+
+test("plain GET is a fast liveness check that does not touch Forms or Drive", () => {
+  const service = createService();
+  const body = service.get({});
+  assert.equal(body.status, "ok");
+  assert.match(body.deployedVersion, /\S/);
+  assert.equal(body.items, undefined);
+  assert.deepEqual(service.events, []);
+});
+
+test("diagnostics GET reports configuration, counts and timings", () => {
+  const service = createService();
+  service.post({ ...payload, submissionId: "dddddddd-4444" });
+  const body = service.get({ diagnostics: "1" });
+  assert.equal(body.status, "ok");
+  assert.deepEqual(body.missingTitles, []);
+  assert.deepEqual(body.wrongTypeTitles, []);
+  assert.equal(body.responseCount, 1);
+  assert.equal(body.recordedSubmissionIds, 1);
+  assert.equal(typeof body.timingsMs.total, "number");
+});
+
+test("failing to record the submissionId after saving still reports success and keeps files", () => {
+  const service = createService({ failRecord: true });
+  const result = service.post({ ...payload, submissionId: "eeeeeeee-5555" });
+  assert.equal(result.status, "success");
+  assert.equal(service.responses.length, 1);
+  assert.ok(service.files.every((file) => !file.trashed));
+  assert.equal(service.events.at(-1), "release");
+});
+
+test("busy lock is reported as retryable", () => {
+  const result = createService({ lockAvailable: false }).post(payload);
+  assert.equal(result.status, "error");
+  assert.equal(result.retryable, true);
 });

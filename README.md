@@ -129,20 +129,29 @@ const GOOGLE_FORM_ID = "YOUR_FORM_EDIT_ID";
 
 ## 5. Verify the deployment
 
-Open the Web app `/exec` URL directly in a browser. `doGet` returns a JSON
-health check, for example:
+Open the Web app `/exec` URL directly in a browser. It returns a fast liveness
+check that does not touch the Form or Drive:
+
+```json
+{ "status": "ok", "deployedVersion": "2026-10-06-echo-retry-safe" }
+```
+
+For the full configuration check, open `/exec?diagnostics=1`, for example:
 
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-field-length-limits",
+  "deployedVersion": "2026-10-06-echo-retry-safe",
+  "timingsMs": { "openForm": 400, "readItems": 300, "readResponses": 900, "duplicateScan": 1200, "checkDrive": 500, "total": 3300 },
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
   "missingTitles": [],
   "wrongTypeTitles": [],
   "acceptsResponses": true,
   "uploadFolderExists": true,
-  "driveAuthorized": true
+  "driveAuthorized": true,
+  "responseCount": 12,
+  "recordedSubmissionIds": 12
 }
 ```
 
@@ -160,6 +169,10 @@ Check that:
   the Apps Script editor and accept the Drive permission prompt.
 - `status` is `ok`. A `status` of `error` usually means `GOOGLE_FORM_ID` is the
   published `1FAIpQLS...` id instead of the edit id.
+
+`timingsMs` shows where execution time goes; `duplicateScan` grows with the
+number of Form responses. Each submission id uses one script property
+(about 60 bytes of the 500 KB property quota, i.e. several thousand registrations).
 
 If you get a raw HTML error page instead of JSON, the script is throwing before
 it can respond. That page has no CORS header, so the browser reports it on the
@@ -193,6 +206,31 @@ Deploy a **new Apps Script version** for mobile validation and duplicate protect
 to take effect; publishing the static website alone does not update the backend.
 
 If anything fails, the user is returned with a generic failure message.
+
+## Troubleshooting "Sorry, unable to open the file at this time" (404)
+
+Apps Script runs `/exec`, then redirects the browser to
+`script.googleusercontent.com/macros/echo?...` to fetch the result. Google's
+echo URL intermittently answers with a 404 "Sorry, unable to open the file at
+this time" page, or redirects back to `/exec` (which then runs `doGet` and
+redirects to another echo URL that 404s). This happens **after** the script has
+finished, so a registration can be saved even though the browser never sees
+the success response. It is more frequent when an execution is slow (roughly
+30 s or more). It is a long-standing Google issue, not a deployment mistake.
+
+The website handles it:
+
+1. Each submission carries a random `submissionId`. After saving, the script
+   records it in Script Properties.
+2. If the response is lost (404, non-JSON, a redirect to the health check, or a
+   network error), the page asks `/exec?submissionId=<id>` whether it was saved.
+3. If it was not saved, the page resubmits with the same id (up to 3 attempts).
+   A resubmission of an already-saved id returns success without creating a
+   second response or uploading files again.
+
+To keep executions short, the plain `/exec` health check no longer opens the
+Form or Drive, and the duplicate check reads only the Name and Mobile Number
+answers of each response.
 
 ## Troubleshooting CORS errors
 
