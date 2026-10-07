@@ -14,13 +14,15 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Name, age, DOB, category, mobile, T-shirt size, comments, display photo and document fields
 - Age is auto-calculated from Date of Birth and shown read-only as
   `X years, Y days`; players must be at least 14 years old (the date picker does
-  not offer later dates) and DOB cannot be more than 70 years ago
+  not offer later dates, and opens on the date exactly 14 years ago instead of
+  today) and DOB cannot be more than 70 years ago
 - Display photo and document are limited to 5 MB each (checked in the browser
   and again in Apps Script). Large document images (400 KB or more) are resized
   in the browser to at most 2000 px and re-encoded as JPEG before upload; PDFs
   are sent unchanged
-- Display photo can be chosen from files or taken with the camera (**Take Photo**).
-  Phones and tablets open the native camera; desktops show a live camera preview
+- Tapping **Add Photo** (or the empty photo box) opens a sheet offering
+  **Take Photo** or **Choose from Gallery**, the same on every device.
+  For Take Photo, phones and tablets open the native camera; desktops show a live camera preview
   with a face guide, shutter and front/back switch, and fall back to the file
   picker when no camera API is available. Camera shots go through the same cropper,
   so full-resolution phone photos (up to 25 MB) are accepted before cropping

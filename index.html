@@ -62,13 +62,10 @@
               </div>
             </div>
             <div class="photo-actions">
-              <label class="upload-button">
-                <input id="photoInput" type="file" accept="image/*">
-                <span id="photoButtonLabel">Choose Photo</span>
-              </label>
-              <button type="button" class="secondary-button camera-button" id="takePhotoBtn">
-                <span aria-hidden="true">📸</span> Take Photo
+              <button type="button" class="upload-button" id="addPhotoBtn" aria-haspopup="dialog">
+                <span id="photoButtonLabel">Add Photo</span>
               </button>
+              <input id="photoInput" type="file" accept="image/*" hidden>
               <input id="cameraInput" type="file" accept="image/*" capture="user" hidden>
             </div>
             <p class="field-hint photo-hint">Display photo <b>*</b> · JPG/PNG, max 5 MB</p>
@@ -90,7 +87,7 @@
             <label class="field">
               <span>Age</span>
               <input name="age" id="ageInput" type="text" readonly tabindex="-1"
-                     class="readonly-input" placeholder="Auto from DOB" aria-readonly="true">
+                     class="readonly-input" placeholder="Calculated from DOB" aria-readonly="true">
             </label>
 
             <label class="field field-full">
@@ -164,6 +161,23 @@
           <span class="arrow">→</span>
         </button>
       </form>
+
+      <div class="crop-modal photo-source-modal hidden" id="photoSourceModal" aria-modal="true" role="dialog" aria-labelledby="photoSourceTitle">
+        <div class="photo-source-dialog">
+          <div class="crop-header">
+            <h3 id="photoSourceTitle">Add display photo</h3>
+            <button type="button" class="close-crop" id="closePhotoSourceBtn" aria-label="Close">×</button>
+          </div>
+          <div class="photo-source-options">
+            <button type="button" class="photo-source-option" id="takePhotoBtn">
+              <span class="photo-source-icon" aria-hidden="true">📸</span> Take Photo
+            </button>
+            <button type="button" class="photo-source-option" id="choosePhotoBtn">
+              <span class="photo-source-icon" aria-hidden="true">🖼️</span> Choose from Gallery
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div class="crop-modal hidden" id="cameraModal" aria-modal="true" role="dialog" aria-labelledby="cameraTitle">
         <div class="crop-dialog">
@@ -248,6 +262,10 @@
     const photoInput = document.getElementById("photoInput");
     const cameraInput = document.getElementById("cameraInput");
     const takePhotoBtn = document.getElementById("takePhotoBtn");
+    const addPhotoBtn = document.getElementById("addPhotoBtn");
+    const choosePhotoBtn = document.getElementById("choosePhotoBtn");
+    const photoSourceModal = document.getElementById("photoSourceModal");
+    const closePhotoSourceBtn = document.getElementById("closePhotoSourceBtn");
     const cameraModal = document.getElementById("cameraModal");
     const cameraVideo = document.getElementById("cameraVideo");
     const cameraStatus = document.getElementById("cameraStatus");
@@ -291,11 +309,41 @@
     let photoDataUrl = "";
     let isSubmitting = false;
 
+    const SUPPORT_CONTACTS = ["9740603178", "9900550930"];
+
     function showStatus(type, message) {
       statusBox.hidden = false;
       statusBox.className = "status " + type;
       statusBox.textContent = message;
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // Built with DOM nodes, not innerHTML, because detail may come from the server.
+    function showRegistrationError(detail) {
+      showStatus("error", "");
+
+      const title = document.createElement("strong");
+      title.className = "status-title";
+      title.textContent = "Registration not completed";
+
+      const body = document.createElement("p");
+      body.textContent = "We were unable to complete your registration. " +
+        (detail || "Please review your details and try again.");
+
+      const support = document.createElement("p");
+      support.className = "status-support";
+      support.append("If the issue persists, please contact the organisers: ");
+      SUPPORT_CONTACTS.forEach((number, index) => {
+        if (index) support.append(" or ");
+        const link = document.createElement("a");
+        link.href = "tel:+91" + number;
+        link.textContent = number.slice(0, 5) + " " + number.slice(5);
+        link.setAttribute("aria-label", "Call " + number.split("").join(" "));
+        support.append(link);
+      });
+      support.append(".");
+
+      statusBox.append(title, body, support);
     }
 
     function setFieldError(element, message) {
@@ -466,7 +514,18 @@
       return ageInput.value;
     }
 
+    // Native pickers open on today (or the min date) when empty, which is
+    // outside the allowed range; start on the youngest allowed DOB instead.
+    function presetDobIfEmpty() {
+      if (dobInput.value) return;
+      applyDobBounds();
+      dobInput.value = dobInput.max;
+      updateAgeFromDob(false);
+    }
+
     applyDobBounds();
+    dobInput.addEventListener("focus", presetDobIfEmpty);
+    dobInput.addEventListener("pointerdown", presetDobIfEmpty);
     dobInput.addEventListener("input", () => updateAgeFromDob(false));
     dobInput.addEventListener("change", () => updateAgeFromDob(true));
     dobInput.addEventListener("blur", () => updateAgeFromDob(true));
@@ -507,7 +566,7 @@
       photoBox.classList.remove("has-preview");
       photoInput.value = "";
       cropPhotoBtn.disabled = true;
-      photoButtonLabel.textContent = "Choose Photo";
+      photoButtonLabel.textContent = "Add Photo";
     }
 
     function loadImageFromFile(file) {
@@ -584,15 +643,15 @@
     function cameraErrorMessage(error) {
       const name = error && error.name;
       if (name === "NotAllowedError" || name === "SecurityError") {
-        return "Camera access was blocked. Allow camera permission in your browser, or use Choose Photo instead.";
+        return "Camera access was blocked. Allow camera permission in your browser, or choose a photo from your gallery instead.";
       }
       if (name === "NotFoundError" || name === "OverconstrainedError" || name === "DevicesNotFoundError") {
-        return "No camera was found on this device. Please use Choose Photo instead.";
+        return "No camera was found on this device. Please choose a photo from your gallery instead.";
       }
       if (name === "NotReadableError") {
         return "The camera is being used by another app. Close it and try again.";
       }
-      return "Could not start the camera. Please use Choose Photo instead.";
+      return "Could not start the camera. Please choose a photo from your gallery instead.";
     }
 
     async function startCamera() {
@@ -671,10 +730,51 @@
       }, "image/jpeg", 0.92);
     }
 
-    takePhotoBtn.addEventListener("click", () => {
+    /* ---------- Photo source sheet ---------- */
+
+    const photoSource = { returnFocus: null };
+
+    function openPhotoSourceDialog() {
       setFieldError(photoError, "");
+      photoSource.returnFocus = document.activeElement;
+      photoSourceModal.classList.remove("hidden");
+      document.body.classList.add("modal-open");
+      takePhotoBtn.focus({ preventScroll: true });
+    }
+
+    function closePhotoSourceDialog() {
+      if (photoSourceModal.classList.contains("hidden")) return;
+      photoSourceModal.classList.add("hidden");
+      document.body.classList.remove("modal-open");
+      if (photoSource.returnFocus && document.contains(photoSource.returnFocus)) {
+        photoSource.returnFocus.focus({ preventScroll: true });
+      }
+    }
+
+    addPhotoBtn.addEventListener("click", openPhotoSourceDialog);
+    closePhotoSourceBtn.addEventListener("click", closePhotoSourceDialog);
+
+    // File pickers must be opened within the same click (user gesture).
+    takePhotoBtn.addEventListener("click", () => {
+      closePhotoSourceDialog();
       if (prefersNativeCamera() || !canUseLiveCamera()) cameraInput.click();
       else openCameraDialog();
+    });
+
+    choosePhotoBtn.addEventListener("click", () => {
+      closePhotoSourceDialog();
+      photoInput.click();
+    });
+
+    photoSourceModal.addEventListener("click", (event) => {
+      if (event.target === photoSourceModal) closePhotoSourceDialog();
+    });
+
+    photoSourceModal.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePhotoSourceDialog();
+      }
     });
 
     captureBtn.addEventListener("click", capturePhoto);
@@ -699,7 +799,7 @@
     photoBox.addEventListener("click", (event) => {
       if (event.target.closest(".photo-toolbar")) return;
       if (cropper.source) openCropDialog();
-      else photoInput.click();
+      else openPhotoSourceDialog();
     });
 
     photoBox.addEventListener("keydown", (event) => {
@@ -1009,7 +1109,7 @@
     if (result === "success") {
       goToSuccessPage();
     } else if (result === "error") {
-      showStatus("error", "We could not complete the registration. Please check the details and try again. Still facing issue contact admin (9740603178/9900550930)");
+      showRegistrationError();
       history.replaceState({}, document.title, window.location.pathname);
     }
 
@@ -1190,7 +1290,7 @@
         }
       } catch (error) {
         console.error(error);
-        showStatus("error", "We could not complete the registration. " + error.message + " Still facing issue contact admin (9740603178/9900550930)");
+        showRegistrationError(error.message);
       } finally {
         // Keep the busy state while the success page loads to avoid a flash of the enabled form.
         if (!redirecting) {
