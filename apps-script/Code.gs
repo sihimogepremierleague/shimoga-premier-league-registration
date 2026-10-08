@@ -23,10 +23,13 @@
  * 2. Replace GOOGLE_FORM_ID below.
  *    Use the EDIT id from https://docs.google.com/forms/d/<EDIT_ID>/edit
  *    (not the public /forms/d/e/1FAIpQLS.../viewform id).
- * 3. Deploy as a Web app:
+ *    The form must not collect email addresses or require sign-in, so
+ *    registrations can use the fast /formResponse submit (see FORM_MAP_KEY).
+ * 3. Run setup() once from the editor and accept the permission prompts.
+ * 4. Deploy as a Web app:
  *    Execute as: Me
  *    Who has access: Anyone
- * 4. Copy the Web app URL into index.html.
+ * 5. Copy the Web app URL into index.html.
  *
  * The website posts a JSON string with Content-Type text/plain so the browser
  * treats it as a CORS simple request. Apps Script web apps cannot answer
@@ -42,7 +45,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-08-tournament-age";
+const DEPLOY_MARKER = "2026-10-08-fast-submit";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -87,6 +90,26 @@ const UPLOAD_FOLDER_ID_KEY = "uploadFolderId";
 // Kept well below the ~30 s point where Google's echo URL starts failing.
 const LOCK_WAIT_MS = 20000;
 
+// Fast submission: a registration is posted to the Form's public /formResponse
+// endpoint (one HTTP call, ~1 s) instead of ~40 FormApp calls (~4 s). The
+// title -> entry id map is cached in Script Properties, refreshed in the
+// background by the website's warm-up request, and only used while fresh.
+const FORM_MAP_KEY = "formMap";
+const FORM_MAP_REFRESH_MS = 10 * 60 * 1000;
+const FORM_MAP_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const FORM_MAP_REFRESHING_KEY = "formMapRefreshing";
+
+// Background uploads: the website uploads the photo and document while the
+// player fills in the form and submits only signed tokens for them.
+const UPLOAD_KINDS = { photo: "Display Photo", document: "Document" };
+const UPLOAD_SECRET_KEY = "uploadTokenSecret";
+// Tokens expire well before cleanupOrphanUploads may trash their files.
+const UPLOAD_TOKEN_MAX_AGE_MS = 20 * 60 * 60 * 1000;
+const ORPHAN_UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Script property per pre-uploaded file linked by a registration, so a
+// replayed "discard" request cannot trash it.
+const CLAIMED_KEY_PREFIX = "claimed:";
+
 const DUPLICATE_MESSAGE =
   "A registration with this name and mobile number already exists. " +
   "Please contact the organizers if you need to update it.";
@@ -108,6 +131,8 @@ const EXPECTED_TITLES = [
 /**
  * GET handler.
  *   /exec                      -> fast liveness check (no Form/Drive access)
+ *   /exec?warm=1               -> liveness check that also refreshes a stale
+ *                                 Form entry map (sent while the player types)
  *   /exec?diagnostics=1        -> full configuration check with timings
  *   /exec?submissionId=<id>    -> whether that submission was recorded
  *
@@ -129,6 +154,13 @@ function doGet(e) {
   }
 
   if (!params.diagnostics) {
+    if (params.warm) {
+      try {
+        refreshFormMapIfStale();
+      } catch (err) {
+        console.warn("Could not refresh the Form entry map: " + err);
+      }
+    }
     return jsonResponse({ status: "ok", deployedVersion: DEPLOY_MARKER });
   }
 
@@ -198,6 +230,14 @@ function doGet(e) {
     diagnostics.registrationIndexReady = keys.indexOf(REGISTRATION_INDEX_READY_KEY) !== -1;
     diagnostics.indexedMobileNumbers = keys
       .filter(function (key) { return key.indexOf(REGISTRATION_KEY_PREFIX) === 0; }).length;
+    diagnostics.uploadSecretReady = keys.indexOf(UPLOAD_SECRET_KEY) !== -1;
+    const rawMap = properties.getProperty(FORM_MAP_KEY);
+    const map = rawMap ? JSON.parse(rawMap) : null;
+    diagnostics.fastSubmit = {
+      enabled: Boolean(getUsableFormMap(rawMap)),
+      reason: map ? map.reason || "" : "map not built yet; run setup() or open the website",
+      mapAgeMinutes: map ? Math.round((Date.now() - map.builtAt) / 60000) : null
+    };
   } catch (err) {
     diagnostics.status = "error";
     diagnostics.propertiesError = err && err.message ? err.message : String(err);
@@ -207,101 +247,106 @@ function doGet(e) {
   return jsonResponse(diagnostics);
 }
 
+/**
+ * POST handler.
+ *   { action: "upload", kind: "photo" | "document", file: <data URL>, name, mobile }
+ *       -> saves one file to Drive while the player is still filling in the
+ *          form and returns a signed upload token
+ *   { action: "discard", kind, upload: <token> }
+ *       -> trashes a background upload the player replaced or removed, unless
+ *          a registration already links to it
+ *   { name, mobile, ..., photoUpload: <token>, documentUpload: <token> }
+ *       -> registers the player. `photo` / `document` data URLs are still
+ *          accepted instead of tokens (fallback for failed background uploads)
+ */
 function doPost(e) {
+  const data = parseRequestPayload(e);
+  if (data && data.action === "upload") return handleUpload(data);
+  if (data && data.action === "discard") return handleDiscard(data);
+  return handleRegistration(data);
+}
+
+function handleRegistration(data) {
+  // Only files uploaded inline by this request; pre-uploaded files are kept on
+  // failure so the browser can retry with the same token.
   const savedFiles = [];
   const lock = LockService.getScriptLock();
+  const timings = createTimings();
+  const skipped = [];
   let locked = false;
   let submitted = false;
-  const started = Date.now();
 
   try {
-    const data = parseRequestPayload(e);
-    if (!data || typeof data.name !== "string" || !data.name.trim()) {
-      throw new Error("Please enter your name.");
-    }
-    if (typeof data.mobile !== "string" || !/^[0-9]{10}$/.test(data.mobile)) {
-      throw new Error("Please enter exactly 10 digits for your mobile number.");
-    }
-    if (TSHIRT_SIZES.indexOf(data.tshirtSize) === -1) {
-      throw new Error("Please select your T-shirt size.");
-    }
-    data.name = data.name.trim().replace(/\s+/g, " ");
-    if (data.name.length > MAX_NAME_LENGTH) {
-      throw new Error("Name must be " + MAX_NAME_LENGTH + " characters or fewer.");
-    }
-    if (data.comment != null && typeof data.comment !== "string") {
-      throw new Error("Comments must be text.");
-    }
-    data.comment = (data.comment || "").trim();
-    if (data.comment.length > MAX_COMMENT_LENGTH) {
-      throw new Error("Comments must be " + MAX_COMMENT_LENGTH + " characters or fewer.");
-    }
+    validateRegistration(data);
     const submissionId = data.submissionId == null ? "" : String(data.submissionId);
     if (submissionId && !isValidSubmissionId(submissionId)) {
       throw new Error("Invalid submission id.");
     }
 
+    // One Script Properties read serves the retry check, the duplicate index,
+    // the Form entry map and the upload token secret.
+    const properties = PropertiesService.getScriptProperties();
+    const snapshot = properties.getProperties();
+    timings.mark("readProperties");
+
     // A retry of a submission that was already saved (its response was lost
     // on the way back to the browser) must not create a second registration.
-    if (submissionId && isSubmissionRecorded(submissionId)) {
+    if (submissionId && snapshot[SUBMISSION_KEY_PREFIX + submissionId] != null) {
       return jsonResponse({ status: "success", alreadyRecorded: true });
     }
 
-    const form = FormApp.openById(GOOGLE_FORM_ID);
-    const missing = findMissingTitles(form);
-    if (missing.length) {
-      throw new Error(
-        "Google Form is missing these question titles: " + missing.join(", ")
-      );
+    const formMap = getUsableFormMap(snapshot[FORM_MAP_KEY]);
+    let form = null;
+    const openForm = function () {
+      if (!form) form = FormApp.openById(GOOGLE_FORM_ID);
+      return form;
+    };
+
+    if (formMap) {
+      validateChoiceAnswers(formMap, data);
+    } else {
+      // Fail before writing anything to Drive if the form is misconfigured.
+      validateFormForFormApp(openForm());
     }
 
-    // Fail before writing anything to Drive if the form is misconfigured.
-    const wrongType = findWrongTypeFileLinkTitles(form);
-    if (wrongType.length) {
-      throw new Error(
-        "Change these Google Form questions to Short answer so file links can be stored: " +
-        wrongType.join(", ")
-      );
-    }
-
-    if (!ensureRegistrationIndex(form, lock)) {
-      return busyResponse();
+    let indexedNames;
+    if (snapshot[REGISTRATION_INDEX_READY_KEY]) {
+      indexedNames = parseIndexedNames(snapshot[REGISTRATION_KEY_PREFIX + data.mobile]);
+    } else {
+      if (!ensureRegistrationIndex(openForm(), lock)) {
+        return busyResponse();
+      }
+      indexedNames = readIndexedNames(properties, data.mobile);
     }
 
     // The index can only produce false positives (for example after an
     // organizer deletes a response), so a hit is confirmed against the Form.
     // That slow scan only runs for likely duplicates, never for new players.
+    const normalizedName = normalizeRegistrationName(data.name);
     let staleIndexEntry = false;
-    if (isIndexedRegistration(data.name, data.mobile)) {
-      if (hasExistingRegistration(form, data.name, data.mobile)) {
+    if (indexedNames.indexOf(normalizedName) !== -1) {
+      if (hasExistingRegistration(openForm(), data.name, data.mobile)) {
         throw new Error(DUPLICATE_MESSAGE);
       }
       staleIndexEntry = true;
     }
+    timings.mark("duplicateCheck");
 
     // Uploads run before taking the lock so concurrent registrations do not
     // queue behind each other's Drive writes.
-    const response = form.createResponse();
-    const skipped = [];
-    const filePrefix = buildFilePrefix(data);
+    const secret = snapshot[UPLOAD_SECRET_KEY] || "";
+    const photoUrl = resolveUpload(data, "photo", secret, savedFiles);
+    const documentUrl = resolveUpload(data, "document", secret, savedFiles);
+    timings.mark("files");
 
-    addText(response, form, "Name", data.name, skipped);
-    addText(response, form, "Age", data.age, skipped);
-    addDate(response, form, "Date of Birth", data.dob, skipped);
-    addChoice(response, form, "Category", data.category, skipped);
-    addText(response, form, "Mobile Number", data.mobile, skipped);
-    addChoice(response, form, "T-Shirt Size", data.tshirtSize, skipped);
-    addText(response, form, "Comments", data.comment, skipped);
-    addFileLink(response, form, "Display Photo", data.photo, filePrefix, savedFiles, skipped);
-    addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
-    addText(response, form, "Created Date",
-      Utilities.formatDate(new Date(), CREATED_DATE_TIMEZONE, CREATED_DATE_FORMAT), skipped);
-    addText(response, form, "Player Tournament Age",
-      formatAgeOn(data.dob, TOURNAMENT_AGE_CUTOFF), skipped);
+    const answers = buildAnswers(data, photoUrl, documentUrl);
+    // Without a Form entry map the FormApp response is prepared outside the lock.
+    let formAppResponse = formMap ? null : buildFormAppResponse(openForm(), answers, skipped);
 
     // Only the final checks and the submit are serialized, so the lock is
     // held for about a second instead of the whole request.
     locked = lock.tryLock(LOCK_WAIT_MS);
+    timings.mark("lock");
     if (!locked) {
       trashFiles(savedFiles);
       return busyResponse();
@@ -314,33 +359,50 @@ function doPost(e) {
 
     // A hit here that was not stale before the lock means the same player was
     // registered concurrently by another request.
-    if (!staleIndexEntry && isIndexedRegistration(data.name, data.mobile)) {
+    const currentNames = readIndexedNames(properties, data.mobile);
+    if (!staleIndexEntry && currentNames.indexOf(normalizedName) !== -1) {
       throw new Error(DUPLICATE_MESSAGE);
     }
 
-    response.submit();
+    let route = "formResponse";
+    const outcome = formMap ? submitViaFormResponse(formMap, answers) : "rejected";
+    // After an unknown outcome, resubmitting blindly could save the player twice.
+    if (outcome === "unknown" && hasExistingRegistration(openForm(), data.name, data.mobile)) {
+      route = "formResponse (confirmed)";
+    } else if (outcome !== "saved") {
+      route = "formApp";
+      if (!formAppResponse) formAppResponse = buildFormAppResponse(openForm(), answers, skipped);
+      formAppResponse.submit();
+    }
     submitted = true;
+    timings.mark("submit");
 
-    try {
-      indexRegistration(data.name, data.mobile);
-    } catch (err) {
-      console.error("Registration saved, but duplicate index was not updated: " + err);
+    const updates = {};
+    if (currentNames.indexOf(normalizedName) === -1) {
+      updates[REGISTRATION_KEY_PREFIX + data.mobile] = JSON.stringify(currentNames.concat([normalizedName]));
     }
-
     if (submissionId) {
-      try {
-        recordSubmission(submissionId);
-      } catch (err) {
-        console.error("Registration saved, but submission id was not recorded: " + err);
-      }
+      updates[SUBMISSION_KEY_PREFIX + submissionId] = new Date().toISOString();
     }
+    // Pre-uploaded files linked by this registration can no longer be discarded.
+    ["photo", "document"].forEach(function (kind) {
+      const info = data[kind + "Upload"] && verifyUpload(data[kind + "Upload"], kind, secret);
+      if (info) updates[CLAIMED_KEY_PREFIX + info.id] = "1";
+    });
+    try {
+      properties.setProperties(updates);
+    } catch (err) {
+      console.error("Registration saved, but duplicate index / submission id were not updated: " + err);
+    }
+    timings.mark("recordProperties");
 
     if (skipped.length) {
       console.warn("Submitted, but these values had no matching form item: " + skipped.join(", "));
     }
 
-    console.log("Registration saved in " + (Date.now() - started) + " ms");
-    return jsonResponse({ status: "success", skippedFields: skipped });
+    const timingsMs = timings.result();
+    console.log("Registration saved via " + route + " in " + timingsMs.total + " ms " + JSON.stringify(timingsMs));
+    return jsonResponse({ status: "success", route: route, skippedFields: skipped, timingsMs: timingsMs });
   } catch (err) {
     console.error(err);
     if (submitted) {
@@ -348,13 +410,110 @@ function doPost(e) {
       return jsonResponse({ status: "success" });
     }
     trashFiles(savedFiles);
-    return jsonResponse({
-      status: "error",
-      message: err && err.message ? err.message : String(err)
-    });
+    const body = { status: "error", message: err && err.message ? err.message : String(err) };
+    if (err && err.code) body.code = err.code;
+    return jsonResponse(body);
   } finally {
     if (locked) lock.releaseLock();
   }
+}
+
+function validateRegistration(data) {
+  if (!data || typeof data.name !== "string" || !data.name.trim()) {
+    throw new Error("Please enter your name.");
+  }
+  if (typeof data.mobile !== "string" || !/^[0-9]{10}$/.test(data.mobile)) {
+    throw new Error("Please enter exactly 10 digits for your mobile number.");
+  }
+  if (TSHIRT_SIZES.indexOf(data.tshirtSize) === -1) {
+    throw new Error("Please select your T-shirt size.");
+  }
+  data.name = data.name.trim().replace(/\s+/g, " ");
+  if (data.name.length > MAX_NAME_LENGTH) {
+    throw new Error("Name must be " + MAX_NAME_LENGTH + " characters or fewer.");
+  }
+  if (data.comment != null && typeof data.comment !== "string") {
+    throw new Error("Comments must be text.");
+  }
+  data.comment = (data.comment || "").trim();
+  if (data.comment.length > MAX_COMMENT_LENGTH) {
+    throw new Error("Comments must be " + MAX_COMMENT_LENGTH + " characters or fewer.");
+  }
+}
+
+function validateFormForFormApp(form) {
+  const missing = findMissingTitles(form);
+  if (missing.length) {
+    throw new Error("Google Form is missing these question titles: " + missing.join(", "));
+  }
+  const wrongType = findWrongTypeFileLinkTitles(form);
+  if (wrongType.length) {
+    throw new Error(
+      "Change these Google Form questions to Short answer so file links can be stored: " +
+      wrongType.join(", ")
+    );
+  }
+}
+
+// A value outside the Form's options would make the fast submit fail anyway.
+function validateChoiceAnswers(formMap, data) {
+  const category = formMap.entries.Category;
+  if (category && category.choices && category.choices.indexOf(data.category) === -1) {
+    throw new Error("Please select your category.");
+  }
+}
+
+function createTimings() {
+  const started = Date.now();
+  let last = started;
+  const timings = {};
+  return {
+    mark: function (name) {
+      const now = Date.now();
+      timings[name] = now - last;
+      last = now;
+    },
+    result: function () {
+      timings.total = Date.now() - started;
+      return timings;
+    }
+  };
+}
+
+function buildAnswers(data, photoUrl, documentUrl) {
+  return [
+    { title: "Name", type: "text", value: data.name },
+    { title: "Age", type: "text", value: data.age },
+    { title: "Date of Birth", type: "date", value: data.dob },
+    { title: "Category", type: "choice", value: data.category },
+    { title: "Mobile Number", type: "text", value: data.mobile },
+    { title: "T-Shirt Size", type: "choice", value: data.tshirtSize },
+    { title: "Comments", type: "text", value: data.comment },
+    { title: "Display Photo", type: "text", value: photoUrl },
+    { title: "Document", type: "text", value: documentUrl },
+    {
+      title: "Created Date", type: "text",
+      value: Utilities.formatDate(new Date(), CREATED_DATE_TIMEZONE, CREATED_DATE_FORMAT)
+    },
+    { title: "Player Tournament Age", type: "text", value: formatAgeOn(data.dob, TOURNAMENT_AGE_CUTOFF) }
+  ].map(function (answer) {
+    answer.value = answer.value == null ? "" : String(answer.value);
+    return answer;
+  });
+}
+
+function buildFormAppResponse(form, answers, skipped) {
+  const response = form.createResponse();
+  answers.forEach(function (answer) {
+    if (answer.type === "date") {
+      addDate(response, form, answer.title, answer.value, skipped);
+    } else if (answer.type === "choice") {
+      addChoice(response, form, answer.title, answer.value, skipped);
+    } else {
+      addText(response, form, answer.title, answer.value, skipped);
+    }
+  });
+  return response;
 }
 
 function isValidSubmissionId(id) {
@@ -365,16 +524,15 @@ function isSubmissionRecorded(id) {
   return PropertiesService.getScriptProperties().getProperty(SUBMISSION_KEY_PREFIX + id) !== null;
 }
 
-function recordSubmission(id) {
-  PropertiesService.getScriptProperties().setProperty(SUBMISSION_KEY_PREFIX + id, new Date().toISOString());
-}
-
 function normalizeRegistrationName(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function readIndexedNames(properties, mobile) {
-  const raw = properties.getProperty(REGISTRATION_KEY_PREFIX + mobile);
+  return parseIndexedNames(properties.getProperty(REGISTRATION_KEY_PREFIX + mobile));
+}
+
+function parseIndexedNames(raw) {
   if (!raw) return [];
   try {
     const names = JSON.parse(raw);
@@ -382,20 +540,6 @@ function readIndexedNames(properties, mobile) {
   } catch (err) {
     return [];
   }
-}
-
-function isIndexedRegistration(name, mobile) {
-  const names = readIndexedNames(PropertiesService.getScriptProperties(), mobile);
-  return names.indexOf(normalizeRegistrationName(name)) !== -1;
-}
-
-function indexRegistration(name, mobile) {
-  const properties = PropertiesService.getScriptProperties();
-  const names = readIndexedNames(properties, mobile);
-  const normalized = normalizeRegistrationName(name);
-  if (names.indexOf(normalized) !== -1) return;
-  names.push(normalized);
-  properties.setProperty(REGISTRATION_KEY_PREFIX + mobile, JSON.stringify(names));
 }
 
 /**
@@ -581,45 +725,6 @@ function addChoice(response, form, title, value, skipped) {
   }
 }
 
-function addFileLink(response, form, title, value, filePrefix, savedFiles, skipped) {
-  if (!value) return;
-
-  const item = findItem(form, title, FormApp.ItemType.TEXT) ||
-               findItem(form, title, FormApp.ItemType.PARAGRAPH_TEXT);
-  if (!item) {
-    noteSkipped(skipped, title, "no short-answer question with this title");
-    return;
-  }
-
-  const match = typeof value === "string" && value.match(/^data:([^;,]+);base64,(.+)$/);
-  if (!match) {
-    noteSkipped(skipped, title, "value was not a base64 data URL");
-    return;
-  }
-
-  const mimeType = match[1].toLowerCase();
-  if (mimeType.indexOf("image/") !== 0 && mimeType !== "application/pdf") {
-    throw new Error(title + " must be an image or PDF file (received " + mimeType + ").");
-  }
-
-  const bytes = Utilities.base64Decode(match[2]);
-  if (bytes.length > MAX_UPLOAD_BYTES) {
-    throw new Error(title + " must be " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB or smaller.");
-  }
-
-  const fileName = filePrefix + "_" + slugify(title) + getFileExtensionFromMime(mimeType);
-  const blob = Utilities.newBlob(bytes, mimeType, fileName);
-  const file = getUploadFolder().createFile(blob);
-  savedFiles.push(file);
-
-  const url = file.getUrl();
-  if (item.getType() === FormApp.ItemType.PARAGRAPH_TEXT) {
-    response.withItemResponse(item.asParagraphTextItem().createResponse(url));
-  } else {
-    response.withItemResponse(item.asTextItem().createResponse(url));
-  }
-}
-
 // One folder lookup per execution; the id is also cached across executions.
 let uploadFolder = null;
 
@@ -663,6 +768,404 @@ function trashFiles(files) {
       console.error("Could not trash orphaned upload " + file.getName() + ": " + err);
     }
   });
+}
+
+/* ---------- Fast submission through the Form's public endpoint ---------- */
+
+/**
+ * Builds the map from question title to the Form's "entry.<id>" field names,
+ * which lets a registration be saved with one HTTP POST to /formResponse
+ * instead of ~40 FormApp calls. Takes a few seconds, so it runs from the
+ * website's warm-up request (refreshFormMapIfStale) or from the editor.
+ */
+function buildFormMap(form) {
+  const map = { builtAt: Date.now(), fastSubmit: false, entries: {} };
+  try {
+    const missing = findMissingTitles(form);
+    if (missing.length) throw new Error("missing question titles: " + missing.join(", "));
+    if (findWrongTypeFileLinkTitles(form).length) throw new Error("file link questions must be Short answer");
+    if (form.collectsEmail()) throw new Error("the form collects email addresses");
+    if (!form.isAcceptingResponses()) throw new Error("the form is not accepting responses");
+    try {
+      if (form.requiresLogin()) throw new Error("the form requires sign-in");
+    } catch (err) {
+      // requiresLogin() is only available to Google Workspace forms.
+      if (/sign-in/.test(err.message)) throw err;
+    }
+
+    const publishedUrl = form.getPublishedUrl();
+    if (!/\/viewform/.test(publishedUrl)) throw new Error("unexpected published URL " + publishedUrl);
+    map.url = publishedUrl.replace(/\/viewform.*$/, "/formResponse");
+
+    const index = getItemIndex(form);
+    const pageBreaks = index.all.filter(function (entry) {
+      return entry.type === FormApp.ItemType.PAGE_BREAK;
+    }).length;
+    if (pageBreaks) {
+      const pages = [];
+      for (let i = 0; i <= pageBreaks; i++) pages.push(i);
+      map.pageHistory = pages.join(",");
+    }
+
+    buildAnswers({}, "", "").forEach(function (answer) {
+      map.entries[answer.title] = describeFormEntry(form, answer);
+    });
+    map.fastSubmit = true;
+  } catch (err) {
+    map.reason = err && err.message ? err.message : String(err);
+  }
+  return map;
+}
+
+// Picks the same item the FormApp path would use and reads its entry id from
+// a pre-filled link.
+function describeFormEntry(form, answer) {
+  const types = FormApp.ItemType;
+  const candidates = answer.type === "date" ? [types.DATE]
+    : answer.type === "choice" ? [types.MULTIPLE_CHOICE, types.LIST]
+    : [types.TEXT, types.PARAGRAPH_TEXT];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const item = findItem(form, answer.title, candidates[i]);
+    if (!item) continue;
+
+    const entry = { type: String(candidates[i]) };
+    let itemResponse;
+    if (candidates[i] === types.DATE) {
+      const dateItem = item.asDateItem();
+      if (!dateItem.includesYear()) throw new Error("\"" + answer.title + "\" must include the year");
+      itemResponse = dateItem.createResponse(new Date(2000, 0, 1));
+    } else if (candidates[i] === types.TEXT) {
+      itemResponse = item.asTextItem().createResponse("x");
+    } else if (candidates[i] === types.PARAGRAPH_TEXT) {
+      itemResponse = item.asParagraphTextItem().createResponse("x");
+    } else {
+      const choiceItem = candidates[i] === types.LIST ? item.asListItem() : item.asMultipleChoiceItem();
+      entry.choices = choiceItem.getChoices().map(function (choice) { return choice.getValue(); });
+      if (!entry.choices.length) throw new Error("\"" + answer.title + "\" has no choices");
+      itemResponse = choiceItem.createResponse(entry.choices[0]);
+    }
+
+    const prefilledUrl = form.createResponse().withItemResponse(itemResponse).toPrefilledUrl();
+    const match = /[?&]entry\.(\d+)=/.exec(prefilledUrl);
+    if (!match) throw new Error("could not read the entry id of \"" + answer.title + "\"");
+    entry.id = match[1];
+    return entry;
+  }
+  throw new Error("\"" + answer.title + "\" has an unsupported question type");
+}
+
+function getUsableFormMap(raw) {
+  if (!raw) return null;
+  try {
+    const map = JSON.parse(raw);
+    if (!map || !map.fastSubmit || !map.url || !map.entries) return null;
+    return Date.now() - map.builtAt < FORM_MAP_MAX_AGE_MS ? map : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Run from the Apps Script editor after editing Form questions so new
+ * registrations immediately use the updated entry ids.
+ */
+function refreshFormMap() {
+  const map = buildFormMap(FormApp.openById(GOOGLE_FORM_ID));
+  PropertiesService.getScriptProperties().setProperty(FORM_MAP_KEY, JSON.stringify(map));
+  console.log(map.fastSubmit
+    ? "Fast submission enabled: " + map.url
+    : "Fast submission disabled (" + map.reason + "); registrations use the slower FormApp path.");
+  return map;
+}
+
+// Called from the website's warm-up GET, so the rebuild never delays a submit.
+function refreshFormMapIfStale() {
+  const raw = PropertiesService.getScriptProperties().getProperty(FORM_MAP_KEY);
+  try {
+    if (raw && Date.now() - JSON.parse(raw).builtAt < FORM_MAP_REFRESH_MS) return false;
+  } catch (err) {
+    // Rebuild a corrupt map.
+  }
+  // A soft guard so a burst of visitors does not rebuild the map in parallel.
+  // The script lock is not used because registrations wait on it.
+  const cache = CacheService.getScriptCache();
+  if (cache.get(FORM_MAP_REFRESHING_KEY)) return false;
+  cache.put(FORM_MAP_REFRESHING_KEY, "1", 60);
+  refreshFormMap();
+  return true;
+}
+
+// Returns "saved", "rejected" (Google refused it, so nothing was saved) or
+// "unknown" (timeout / server error: the response may or may not exist).
+function submitViaFormResponse(formMap, answers) {
+  const fields = [];
+  const add = function (name, value) {
+    fields.push(encodeURIComponent(name) + "=" + encodeURIComponent(value));
+  };
+
+  for (let i = 0; i < answers.length; i++) {
+    const answer = answers[i];
+    if (!answer.value) continue;
+    const entry = formMap.entries[answer.title];
+    if (!entry) return "rejected";
+    if (entry.type === String(FormApp.ItemType.DATE)) {
+      const date = parseIsoDateUtc(answer.value);
+      if (!date) continue;
+      add("entry." + entry.id + "_year", date.getUTCFullYear());
+      add("entry." + entry.id + "_month", date.getUTCMonth() + 1);
+      add("entry." + entry.id + "_day", date.getUTCDate());
+    } else {
+      add("entry." + entry.id, answer.value);
+    }
+  }
+  if (formMap.pageHistory) add("pageHistory", formMap.pageHistory);
+
+  try {
+    const response = UrlFetchApp.fetch(formMap.url, {
+      method: "post",
+      contentType: "application/x-www-form-urlencoded",
+      payload: fields.join("&"),
+      followRedirects: false,
+      muteHttpExceptions: true
+    });
+    const code = response.getResponseCode();
+    if (code === 200) return "saved";
+    // Redirects (sign-in, closed form) and 4xx validation errors save nothing.
+    if (code >= 300 && code < 500) {
+      console.warn("Form endpoint rejected the response with HTTP " + code + "; falling back to FormApp.");
+      return "rejected";
+    }
+    console.warn("Form endpoint returned HTTP " + code + "; the response may or may not be saved.");
+  } catch (err) {
+    console.warn("Form endpoint request failed; the response may or may not be saved: " + err);
+  }
+  return "unknown";
+}
+
+/* ---------- Background uploads ---------- */
+
+function handleUpload(data) {
+  const started = Date.now();
+  try {
+    const title = UPLOAD_KINDS[data.kind];
+    if (!title) throw new Error("Unknown upload type.");
+    const file = decodeUpload(title, data.file);
+
+    // Name and mobile are optional here; they only make Drive file names readable.
+    const mobile = typeof data.mobile === "string" && /^[0-9]{10}$/.test(data.mobile) ? data.mobile : "";
+    const name = typeof data.name === "string"
+      ? data.name.trim().replace(/\s+/g, " ").slice(0, MAX_NAME_LENGTH) : "";
+    const stamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyyMMdd-HHmmss");
+    const owner = uploadOwner(mobile, name);
+    const ext = getFileExtensionFromMime(file.mimeType);
+
+    const saved = getUploadFolder().createFile(
+      Utilities.newBlob(file.bytes, file.mimeType, uploadFileName(stamp, owner, title, ext))
+    );
+    const info = {
+      v: 1, kind: data.kind, id: saved.getId(), url: saved.getUrl(),
+      stamp: stamp, owner: owner, ext: ext, ts: Date.now()
+    };
+    return jsonResponse({
+      status: "success",
+      upload: signUpload(info, getUploadSecret()),
+      timingsMs: { total: Date.now() - started }
+    });
+  } catch (err) {
+    console.error(err);
+    return jsonResponse({ status: "error", message: err && err.message ? err.message : String(err) });
+  }
+}
+
+// The website calls this when a player replaces or removes a file that was
+// already uploaded, so only the final copy stays in Drive. Anything missed
+// here (closed tab, lost request) is trashed later by cleanupOrphanUploads.
+function handleDiscard(data) {
+  try {
+    if (!UPLOAD_KINDS[data.kind]) throw new Error("Unknown upload type.");
+    const properties = PropertiesService.getScriptProperties();
+    const info = verifyUpload(data.upload, data.kind, properties.getProperty(UPLOAD_SECRET_KEY));
+    if (!info) throw new Error("Invalid or expired upload token.");
+    if (properties.getProperty(CLAIMED_KEY_PREFIX + info.id) !== null) {
+      return jsonResponse({ status: "success", trashed: false });
+    }
+    DriveApp.getFileById(info.id).setTrashed(true);
+    return jsonResponse({ status: "success", trashed: true });
+  } catch (err) {
+    console.warn("Discard failed: " + err);
+    return jsonResponse({ status: "error", message: err && err.message ? err.message : String(err) });
+  }
+}
+
+// Returns the Drive link for the photo or document of a registration.
+function resolveUpload(data, kind, secret, savedFiles) {
+  const title = UPLOAD_KINDS[kind];
+  const token = data[kind + "Upload"];
+  if (token) {
+    const info = verifyUpload(token, kind, secret);
+    if (!info) {
+      const err = new Error("Your " + title.toLowerCase() + " upload has expired. Please try again.");
+      err.code = "upload_invalid";
+      throw err;
+    }
+    renameUploadIfNeeded(info, data, title);
+    return info.url;
+  }
+  if (!data[kind]) return "";
+
+  const file = decodeUpload(title, data[kind]);
+  const fileName = buildFilePrefix(data) + "_" + slugify(title) + getFileExtensionFromMime(file.mimeType);
+  const saved = getUploadFolder().createFile(Utilities.newBlob(file.bytes, file.mimeType, fileName));
+  savedFiles.push(saved);
+  return saved.getUrl();
+}
+
+function decodeUpload(title, value) {
+  const match = typeof value === "string" && value.match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) throw new Error(title + " must be an image or PDF file.");
+
+  const mimeType = match[1].toLowerCase();
+  if (mimeType.indexOf("image/") !== 0 && mimeType !== "application/pdf") {
+    throw new Error(title + " must be an image or PDF file (received " + mimeType + ").");
+  }
+
+  const bytes = Utilities.base64Decode(match[2]);
+  if (bytes.length > MAX_UPLOAD_BYTES) {
+    throw new Error(title + " must be " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB or smaller.");
+  }
+  return { mimeType: mimeType, bytes: bytes };
+}
+
+function uploadOwner(mobile, name) {
+  return [slugify(mobile), slugify(name)].filter(Boolean).join("_");
+}
+
+// Same pattern as inline uploads: <stamp>_<mobile>_<name>_<title><ext>.
+function uploadFileName(stamp, owner, title, ext) {
+  return [stamp, owner, slugify(title)].filter(Boolean).join("_") + ext;
+}
+
+// Files are uploaded before the player finishes typing, so the final name or
+// mobile can differ from the one in the Drive file name.
+function renameUploadIfNeeded(info, data, title) {
+  const owner = uploadOwner(data.mobile, data.name);
+  if (owner === info.owner) return;
+  try {
+    DriveApp.getFileById(info.id).setName(uploadFileName(info.stamp, owner, title, info.ext));
+  } catch (err) {
+    console.warn("Could not rename upload " + info.id + ": " + err);
+  }
+}
+
+// Tokens are signed so a registration can only link files this script saved.
+function signUpload(info, secret) {
+  const payload = JSON.stringify(info);
+  return { payload: payload, sig: computeUploadSignature(payload, secret) };
+}
+
+function computeUploadSignature(payload, secret) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, secret));
+}
+
+function verifyUpload(token, kind, secret) {
+  if (!secret || !token || typeof token.payload !== "string" || typeof token.sig !== "string") return null;
+  const expected = computeUploadSignature(token.payload, secret);
+  if (expected.length !== token.sig.length) return null;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ token.sig.charCodeAt(i);
+  if (diff) return null;
+
+  let info;
+  try {
+    info = JSON.parse(token.payload);
+  } catch (err) {
+    return null;
+  }
+  if (!info || info.kind !== kind || typeof info.id !== "string" || typeof info.url !== "string") return null;
+  const age = Date.now() - info.ts;
+  // Older tokens may point at files already removed by cleanupOrphanUploads.
+  if (!(age >= -5 * 60 * 1000 && age <= UPLOAD_TOKEN_MAX_AGE_MS)) return null;
+  return info;
+}
+
+function getUploadSecret() {
+  const properties = PropertiesService.getScriptProperties();
+  let secret = properties.getProperty(UPLOAD_SECRET_KEY);
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    properties.setProperty(UPLOAD_SECRET_KEY, secret);
+  }
+  return secret;
+}
+
+/**
+ * Trashes uploads that no Form response links to and that are older than
+ * ORPHAN_UPLOAD_MAX_AGE_MS, i.e. background uploads from players who never
+ * submitted. Trashed files can be restored from Drive for 30 days.
+ * Scheduled by installCleanupTrigger(); can also be run from the editor.
+ */
+function cleanupOrphanUploads() {
+  const form = FormApp.openById(GOOGLE_FORM_ID);
+  const items = FILE_LINK_TITLES.map(function (title) {
+    return findItemByTitle(form, title);
+  }).filter(Boolean);
+  const responses = form.getResponses();
+  const referenced = {};
+  responses.forEach(function (response) {
+    items.forEach(function (item) {
+      const answer = response.getResponseForItem(item);
+      if (answer) extractDriveIds(String(answer.getResponse())).forEach(function (id) { referenced[id] = true; });
+    });
+  });
+  if (responses.length && !Object.keys(referenced).length) {
+    console.warn("No Drive links found in Form responses; skipping cleanup to be safe.");
+    return 0;
+  }
+
+  const cutoff = Date.now() - ORPHAN_UPLOAD_MAX_AGE_MS;
+  const files = getUploadFolder().getFiles();
+  let trashed = 0;
+  while (files.hasNext()) {
+    const file = files.next();
+    if (referenced[file.getId()] || file.getDateCreated().getTime() > cutoff) continue;
+    file.setTrashed(true);
+    trashed++;
+  }
+  console.log("Trashed " + trashed + " unused upload(s).");
+  return trashed;
+}
+
+function extractDriveIds(text) {
+  const ids = [];
+  const pattern = /(?:\/d\/|[?&]id=)([-\w]{20,})/g;
+  let match;
+  while ((match = pattern.exec(text))) ids.push(match[1]);
+  return ids;
+}
+
+function installCleanupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "cleanupOrphanUploads") ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger("cleanupOrphanUploads").timeBased().everyHours(6).create();
+  console.log("cleanupOrphanUploads scheduled every 6 hours.");
+}
+
+/**
+ * Run once from the Apps Script editor after pasting the code (and after
+ * every Form question change). Authorizes Drive, Forms, external requests and
+ * triggers, then prepares everything a registration needs so no player pays
+ * for one-time setup.
+ */
+function setup() {
+  setupUploadFolder();
+  getUploadSecret();
+  if (!PropertiesService.getScriptProperties().getProperty(REGISTRATION_INDEX_READY_KEY)) {
+    rebuildRegistrationIndex();
+  }
+  refreshFormMap();
+  installCleanupTrigger();
 }
 
 // Parses YYYY-MM-DD as a UTC date; returns null for malformed or impossible dates.
