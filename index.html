@@ -404,13 +404,14 @@
     // Phone photos of ID cards are often 2–3 MB; a 2000 px JPEG stays readable
     // at a fraction of the size, which makes the upload much faster on mobile
     // data. PDFs and images the browser cannot decode are sent unchanged.
+    // Returns the Blob to upload.
     const DOCUMENT_MAX_SIDE = 2000;
     const DOCUMENT_JPEG_QUALITY = 0.85;
     const DOCUMENT_COMPRESS_MIN_BYTES = 400 * 1024;
 
-    async function prepareDocumentDataUrl(file) {
+    async function prepareDocumentBlob(file) {
       if (!/^image\//.test(file.type) || file.type === "image/gif" || file.size < DOCUMENT_COMPRESS_MIN_BYTES) {
-        return readFileAsDataUrl(file);
+        return file;
       }
       let image;
       try {
@@ -425,10 +426,10 @@
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", DOCUMENT_JPEG_QUALITY));
-        return readFileAsDataUrl(blob && blob.size < file.size ? blob : file);
+        return blob && blob.size < file.size ? blob : file;
       } catch (error) {
         console.warn("Could not compress document image, sending original:", error);
-        return readFileAsDataUrl(file);
+        return file;
       } finally {
         if (image) URL.revokeObjectURL(image.src);
       }
@@ -577,12 +578,7 @@
         return;
       }
       setFieldError(documentError, "");
-      if (!file) {
-        clearUpload("document");
-        return;
-      }
-      getDocumentDataUrl(file);
-      scheduleUploads();
+      startDocumentUpload();
     });
 
     /* ---------- Display photo ---------- */
@@ -600,12 +596,12 @@
       cropPhotoBtn.disabled = false;
       photoButtonLabel.textContent = "Change Photo";
       setFieldError(photoError, "");
-      scheduleUploads();
+      schedulePhotoUpload();
     }
 
     function clearPhotoPreview() {
       photoDataUrl = "";
-      clearUpload("photo");
+      schedulePhotoUpload();
       setCropSource(null);
       photoPreview.removeAttribute("src");
       photoBox.classList.remove("has-preview");
@@ -1166,23 +1162,6 @@
 
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    // Apps Script has a cold start of a few seconds after it has been idle.
-    // A cheap liveness GET while the user fills in the form means the real
-    // submission usually lands on a warm instance.
-    const WARM_UP_INTERVAL_MS = 60 * 1000;
-    let lastWarmUp = 0;
-
-    function warmUpService() {
-      if (isSubmitting || Date.now() - lastWarmUp < WARM_UP_INTERVAL_MS) return;
-      lastWarmUp = Date.now();
-      // warm=1 also lets the script refresh its Form entry map in the background.
-      fetch(form.action + "?warm=1", { method: "GET", cache: "no-store" }).catch(() => {});
-    }
-
-    warmUpService();
-    documentInput.addEventListener("change", warmUpService);
-    consentInputs.forEach((input) => input.addEventListener("change", warmUpService));
-
     function createSubmissionId() {
       if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
       const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -1250,28 +1229,90 @@
       return null;
     }
 
-    /* ---------- Background uploads ---------- */
+    /* ---------- Direct uploads and fast submit ---------- */
 
-    // The photo and document are uploaded while the player fills in the rest
-    // of the form, so Submit only sends a small text record with signed upload
-    // tokens. Uploads start once name and mobile are filled in, so the Drive
-    // file names identify the player. If a background upload fails, Submit
-    // sends that file inline instead (the slower original path). A file the
-    // player replaces or removes is discarded from Drive straight away.
-    const UPLOAD_ATTEMPTS = 2;
+    // Apps Script answers in anywhere from 1 to 40+ seconds, so Submit never
+    // waits on it. As soon as the page opens, Apps Script is asked (in the
+    // background) for the Form's question map and a few Drive upload URLs.
+    // Each chosen file is PUT straight to Drive, and Submit posts the answers
+    // straight to the Google Form. A form-submit trigger in Apps Script then
+    // names the files and updates the duplicate index. If anything is missing
+    // at Submit (no map, no upload URL, a failed upload), the registration is
+    // sent through Apps Script instead (the slower original path).
+    const SESSIONS_PER_REQUEST = 2;
     // Waits for a short pause so repeated photo adjustments upload only once.
-    const UPLOAD_DEBOUNCE_MS = 1200;
+    const PHOTO_UPLOAD_DEBOUNCE_MS = 1200;
+    // Submit waits at most this long for a background duplicate check.
+    const DUPLICATE_CHECK_WAIT_MS = 1500;
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    // Uploads older than this are not reused: the Apps Script cleanup may
+    // trash unlinked uploads after 24 hours.
+    const UPLOAD_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+    // The question map is refreshed in the background while the page is open;
+    // an older map is not trusted, because Google's reply cannot be read.
+    const FORM_MAP_REFRESH_MS = 10 * 60 * 1000;
+    const FORM_MAP_MAX_AGE_MS = 30 * 60 * 1000;
+
+    const prepared = {
+      formMap: null,
+      formMapAt: 0,
+      serverOffsetMs: 0,
+      sessions: { photo: [], document: [] },
+      refills: { photo: null, document: null }
+    };
     const backgroundUploads = { photo: null, document: null };
     let preparedDocument = null;
-    let uploadTimer = 0;
+    let photoUploadTimer = 0;
+    let duplicateCheck = null;
 
-    // Compressing a large document image takes a moment on phones, so it is
-    // done once, as soon as the file is chosen.
-    function getDocumentDataUrl(file) {
+    async function requestPrepare(kinds) {
+      const url = form.action + "?prepare=1&origin=" + encodeURIComponent(location.origin) +
+        "&kinds=" + kinds.join(",") + "&count=" + SESSIONS_PER_REQUEST;
+      const body = await callService(url, { method: "GET", cache: "no-store" });
+      if (!body || body.status !== "ok") return false;
+      if (body.formMap) {
+        prepared.formMap = body.formMap;
+        prepared.formMapAt = Date.now();
+      }
+      if (typeof body.serverTime === "number") prepared.serverOffsetMs = body.serverTime - Date.now();
+      if (body.sessions) {
+        kinds.forEach((kind) => prepared.sessions[kind].push(...(body.sessions[kind] || [])));
+      }
+      return true;
+    }
+
+    // Requests more upload URLs for the given kinds (one request at a time per kind).
+    function refillSessions(kinds) {
+      const missing = kinds.filter((kind) => !prepared.refills[kind]);
+      if (!missing.length) return Promise.all(kinds.map((kind) => prepared.refills[kind]));
+      const request = (async () => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt) await delay(3000);
+          if (await requestPrepare(missing)) break;
+        }
+      })().finally(() => missing.forEach((kind) => { prepared.refills[kind] = null; }));
+      missing.forEach((kind) => { prepared.refills[kind] = request; });
+      return request;
+    }
+
+    refillSessions(["photo", "document"]);
+    setInterval(() => {
+      if (!isSubmitting && document.visibilityState === "visible") requestPrepare([]);
+    }, FORM_MAP_REFRESH_MS);
+
+    function usableFormMap() {
+      return prepared.formMap && Date.now() - prepared.formMapAt < FORM_MAP_MAX_AGE_MS ? prepared.formMap : null;
+    }
+
+    function getDocumentBlob(file) {
       if (!preparedDocument || preparedDocument.file !== file) {
-        preparedDocument = { file, promise: prepareDocumentDataUrl(file) };
+        preparedDocument = { file, promise: prepareDocumentBlob(file) };
       }
       return preparedDocument.promise;
+    }
+
+    async function getDocumentDataUrl(file) {
+      return readFileAsDataUrl(await getDocumentBlob(file));
     }
 
     function currentUploadSource(kind) {
@@ -1280,16 +1321,16 @@
       return file && file.size <= MAX_FILE_BYTES ? file : null;
     }
 
-    function uploadDetailsReady() {
-      return Boolean(form.elements.name.value.trim()) && /^[0-9]{10}$/.test(mobileInput.value);
+    function driveFileLink(fileId) {
+      return "https://drive.google.com/file/d/" + fileId + "/view?usp=drivesdk";
     }
 
     // Fire-and-forget; anything not discarded is removed by the 24-hour cleanup.
-    function discardUpload(kind, token) {
+    function discardUpload(fileId) {
       fetch(form.action, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action: "discard", kind, upload: token }),
+        body: JSON.stringify({ action: "discard", fileId }),
         keepalive: true
       }).catch(() => {});
     }
@@ -1303,91 +1344,215 @@
       if (!old || old === entry) return;
       old.superseded = true;
       old.discardWhenDone = !isSubmitting;
-      if (old.token && old.discardWhenDone) discardUpload(kind, old.token);
-    }
-
-    // Returns the upload entry for the current file, starting it if needed.
-    // A failed upload for the same file is not retried; Submit sends it inline.
-    function ensureUpload(kind) {
-      const source = currentUploadSource(kind);
-      const existing = backgroundUploads[kind];
-      if (!source) {
-        setUploadEntry(kind, null);
-        return null;
-      }
-      if (existing && existing.source === source) return existing;
-
-      const entry = { source, token: null, pending: true, superseded: false };
-      setUploadEntry(kind, entry);
-      entry.promise = (async () => {
-        try {
-          const file = kind === "photo" ? source : await getDocumentDataUrl(source);
-          for (let attempt = 0; attempt < UPLOAD_ATTEMPTS && !entry.superseded; attempt++) {
-            if (attempt) await delay(1500);
-            const body = await callService(form.action, {
-              method: "POST",
-              headers: { "Content-Type": "text/plain;charset=utf-8" },
-              body: JSON.stringify({
-                action: "upload",
-                kind,
-                file,
-                name: form.elements.name.value.trim(),
-                mobile: mobileInput.value
-              })
-            });
-            if (body && body.status === "success" && body.upload) {
-              entry.token = body.upload;
-              break;
-            }
-            // A validation error will be reported by the inline submit.
-            if (body && body.status === "error") break;
-          }
-        } catch (error) {
-          console.warn("Background " + kind + " upload failed:", error);
-        }
-        entry.pending = false;
-        // Replaced while uploading: remove the copy that just finished.
-        if (entry.superseded && entry.token && entry.discardWhenDone) discardUpload(kind, entry.token);
-        return entry.token;
-      })();
-      return entry;
+      if (old.fileId && old.discardWhenDone) discardUpload(old.fileId);
     }
 
     function clearUpload(kind) {
       setUploadEntry(kind, null);
     }
 
-    function scheduleUploads() {
-      // Discard a replaced or removed file right away, even if the new upload
-      // has to wait for the name and mobile number.
-      ["photo", "document"].forEach((kind) => {
-        const entry = backgroundUploads[kind];
-        if (entry && entry.source !== currentUploadSource(kind)) clearUpload(kind);
-      });
-      clearTimeout(uploadTimer);
-      uploadTimer = setTimeout(() => {
-        if (isSubmitting || !uploadDetailsReady()) return;
-        ensureUpload("photo");
-        ensureUpload("document");
-      }, UPLOAD_DEBOUNCE_MS);
+    async function putToDrive(sessionUrl, blob) {
+      try {
+        const response = await fetch(sessionUrl, {
+          method: "PUT",
+          headers: { "Content-Type": blob.type || "application/octet-stream" },
+          body: blob
+        });
+        if (!response.ok) return null;
+        const meta = await response.json();
+        return meta && meta.id ? meta.id : null;
+      } catch (error) {
+        console.warn("Direct upload to Drive failed:", error);
+        return null;
+      }
     }
 
-    // Returns the payload fields for one file: a token, or the file inline.
-    async function resolveUploadField(kind) {
+    // Returns the upload entry for the current file, starting it if needed.
+    // entry.stage is "waiting" until an upload URL is available, then
+    // "uploading"; Submit only waits for uploads that are actually running.
+    function ensureUpload(kind) {
+      const source = currentUploadSource(kind);
+      const existing = backgroundUploads[kind];
+      if (!source) {
+        clearUpload(kind);
+        return null;
+      }
+      if (existing && existing.source === source) return existing;
+
+      const entry = {
+        source,
+        fileId: null,
+        stage: prepared.sessions[kind].length ? "uploading" : "waiting",
+        superseded: false,
+        discardWhenDone: false
+      };
+      setUploadEntry(kind, entry);
+      entry.promise = (async () => {
+        try {
+          const blob = kind === "photo" ? await (await fetch(source)).blob() : await getDocumentBlob(source);
+          for (let attempt = 0; attempt < 2 && !entry.superseded && !entry.fileId; attempt++) {
+            if (!prepared.sessions[kind].length) {
+              // Submit is waiting: never wait on Apps Script for a new URL.
+              if (entry.submitWaiting) break;
+              entry.stage = "waiting";
+              await refillSessions([kind]);
+              if (entry.superseded) break;
+            }
+            const sessionUrl = prepared.sessions[kind].shift();
+            if (!sessionUrl || entry.superseded) break;
+            if (!prepared.sessions[kind].length) refillSessions([kind]);
+            entry.stage = "uploading";
+            entry.fileId = await putToDrive(sessionUrl, blob);
+            if (entry.fileId) entry.uploadedAt = Date.now();
+          }
+        } catch (error) {
+          console.warn("Background " + kind + " upload failed:", error);
+        }
+        entry.stage = "done";
+        // Replaced while uploading: remove the copy that just finished.
+        if (entry.superseded && entry.fileId && entry.discardWhenDone) discardUpload(entry.fileId);
+        return entry.fileId;
+      })();
+      return entry;
+    }
+
+    function schedulePhotoUpload() {
+      // Discard a replaced or removed photo right away.
+      const entry = backgroundUploads.photo;
+      if (entry && entry.source !== currentUploadSource("photo")) clearUpload("photo");
+      clearTimeout(photoUploadTimer);
+      photoUploadTimer = setTimeout(() => {
+        if (!isSubmitting) ensureUpload("photo");
+      }, PHOTO_UPLOAD_DEBOUNCE_MS);
+    }
+
+    function startDocumentUpload() {
+      if (!currentUploadSource("document")) {
+        clearUpload("document");
+        return;
+      }
+      ensureUpload("document");
+    }
+
+    // Returns the Drive file id for a kind, waiting only for an upload that is
+    // already running; null means the file must go through Apps Script.
+    async function directFileId(kind) {
+      clearTimeout(photoUploadTimer);
       const entry = ensureUpload(kind);
-      const token = entry ? await entry.promise : null;
-      // The file may have been replaced while the upload was running.
-      if (token && backgroundUploads[kind] === entry) return { [kind + "Upload"]: token };
-      return kind === "photo"
-        ? { photo: photoDataUrl }
-        : { document: await getDocumentDataUrl(documentInput.files[0]) };
+      if (!entry) return null;
+      // No upload URL yet (Apps Script is slow): stop and send the file inline.
+      if (entry.stage === "waiting") {
+        clearUpload(kind);
+        return null;
+      }
+      entry.submitWaiting = true;
+      await entry.promise;
+      if (backgroundUploads[kind] !== entry || !entry.fileId) return null;
+      if (Date.now() - entry.uploadedAt > UPLOAD_MAX_AGE_MS) {
+        clearUpload(kind);
+        return null;
+      }
+      return entry.fileId;
     }
 
-    form.elements.name.addEventListener("change", scheduleUploads);
-    mobileInput.addEventListener("change", scheduleUploads);
+    /* ----- Background duplicate pre-check ----- */
+
+    function duplicateKey() {
+      const name = form.elements.name.value.trim().replace(/\s+/g, " ").toLowerCase();
+      return name && /^[0-9]{10}$/.test(mobileInput.value) ? name + "|" + mobileInput.value : "";
+    }
+
+    function startDuplicateCheck() {
+      const key = duplicateKey();
+      if (!key || (duplicateCheck && duplicateCheck.key === key)) return;
+      const check = { key, result: null };
+      check.promise = callService(form.action + "?check=1&name=" +
+        encodeURIComponent(form.elements.name.value.trim()) + "&mobile=" + mobileInput.value,
+      { method: "GET", cache: "no-store" }).then((body) => {
+        if (body && body.status === "ok") check.result = body;
+        return check.result;
+      });
+      duplicateCheck = check;
+    }
+
+    // Returns the duplicate message if this player is known to be registered.
+    async function knownDuplicateMessage() {
+      startDuplicateCheck();
+      const check = duplicateCheck;
+      if (!check || check.key !== duplicateKey()) return "";
+      if (!check.result) await Promise.race([check.promise, delay(DUPLICATE_CHECK_WAIT_MS)]);
+      return check.result && check.result.duplicate ? check.result.message : "";
+    }
+
+    form.elements.name.addEventListener("change", startDuplicateCheck);
+    mobileInput.addEventListener("change", startDuplicateCheck);
     mobileInput.addEventListener("input", () => {
-      if (/^[0-9]{10}$/.test(mobileInput.value)) scheduleUploads();
+      if (/^[0-9]{10}$/.test(mobileInput.value)) startDuplicateCheck();
     });
+
+    /* ----- Posting straight to the Google Form ----- */
+
+    function formatIstDateTime(ms) {
+      return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 19).replace("T", " ");
+    }
+
+    // Same answers Apps Script would send (see buildAnswers in Code.gs).
+    function buildAnswers(payload, photoLink, documentLink) {
+      const dob = parseIsoDate(payload.dob);
+      return [
+        { title: "Name", value: payload.name },
+        { title: "Age", value: payload.age },
+        { title: "Date of Birth", value: payload.dob },
+        { title: "Category", value: payload.category },
+        { title: "Mobile Number", value: payload.mobile },
+        { title: "T-Shirt Size", value: payload.tshirtSize },
+        { title: "Comments", value: payload.comment },
+        { title: "Display Photo", value: photoLink },
+        { title: "Document", value: documentLink },
+        // The server time offset keeps this right even if the phone clock is off.
+        { title: "Created Date", value: formatIstDateTime(Date.now() + prepared.serverOffsetMs) },
+        { title: "Player Tournament Age", value: dob ? formatAge(calculateAge(dob, TOURNAMENT_AGE_CUTOFF)) : "" }
+      ];
+    }
+
+    // Google Forms does not let the page read its reply, so every answer is
+    // checked against the Form's questions first; null means "use Apps Script".
+    function buildFormResponseBody(map, answers) {
+      const body = new URLSearchParams();
+      for (const answer of answers) {
+        const entry = map.entries[answer.title];
+        const value = answer.value == null ? "" : String(answer.value);
+        if (!entry) return null;
+        if (!value) {
+          // Google would reject a missing required answer without telling us.
+          if (entry.required === false) continue;
+          return null;
+        }
+        if (entry.choices && !entry.choices.includes(value)) return null;
+        if (entry.type === "DATE") {
+          const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+          if (!match) return null;
+          body.append("entry." + entry.id + "_year", String(Number(match[1])));
+          body.append("entry." + entry.id + "_month", String(Number(match[2])));
+          body.append("entry." + entry.id + "_day", String(Number(match[3])));
+        } else {
+          body.append("entry." + entry.id, value);
+        }
+      }
+      if (map.pageHistory) body.append("pageHistory", map.pageHistory);
+      return body;
+    }
+
+    // Returns true once the browser has delivered the response to Google Forms.
+    async function postToGoogleForm(map, body) {
+      try {
+        await fetch(map.url, { method: "POST", mode: "no-cors", body });
+        return true;
+      } catch (error) {
+        console.warn("Posting to the Google Form failed:", error);
+        return false;
+      }
+    }
 
     function focusProblem(element) {
       element.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1441,7 +1606,6 @@
 
       try {
         const payload = {
-          submissionId: createSubmissionId(),
           name: form.elements.name.value.trim(),
           age: age,
           dob: dobInput.value,
@@ -1451,27 +1615,42 @@
           comment: form.elements.comment.value.trim()
         };
 
-        const uploadsPending = ["photo", "document"].some((kind) => {
+        const duplicateMessage = await knownDuplicateMessage();
+        if (duplicateMessage) throw new Error(duplicateMessage);
+
+        const uploading = ["photo", "document"].some((kind) => {
           const entry = backgroundUploads[kind];
-          return !entry || entry.pending;
+          return !entry || entry.stage !== "done";
         });
-        submitProgressText.textContent = uploadsPending
+        submitProgressText.textContent = uploading
           ? "Finishing your photo and document upload…"
           : "Sending your registration…";
-        const fileFields = await Promise.all(["photo", "document"].map(resolveUploadField));
-        Object.assign(payload, ...fileFields);
+        const [photoFileId, documentFileId] = await Promise.all([directFileId("photo"), directFileId("document")]);
 
-        submitProgressText.textContent = "Sending your registration…";
-        let resultBody = await submitRegistration(payload);
+        // Fast path: everything goes straight to the Google Form.
+        let saved = false;
+        let formResponseAttempted = false;
+        const map = usableFormMap();
+        if (map && photoFileId && documentFileId) {
+          const body = buildFormResponseBody(map, buildAnswers(payload, driveFileLink(photoFileId), driveFileLink(documentFileId)));
+          if (body) {
+            submitProgressText.textContent = "Sending your registration…";
+            formResponseAttempted = true;
+            saved = await postToGoogleForm(map, body);
+          }
+        }
 
-        // An expired or unrecognised upload token: resend the files inline.
-        if (resultBody && resultBody.code === "upload_invalid") {
-          backgroundUploads.photo = backgroundUploads.document = null;
-          delete payload.photoUpload;
-          delete payload.documentUpload;
-          payload.photo = photoDataUrl;
-          payload.document = await getDocumentDataUrl(documentFile);
-          submitProgressText.textContent = "Uploading your photo and document…";
+        // Fallback: register through Apps Script, sending any file that was
+        // not uploaded directly inline.
+        let resultBody = saved ? { status: "success" } : null;
+        if (!saved) {
+          payload.submissionId = createSubmissionId();
+          if (formResponseAttempted) payload.formResponseAttempted = true;
+          if (photoFileId) payload.photoFileId = photoFileId;
+          else payload.photo = photoDataUrl;
+          if (documentFileId) payload.documentFileId = documentFileId;
+          else payload.document = await getDocumentDataUrl(documentFile);
+          submitProgressText.textContent = "Sending your registration… this can take a little longer.";
           resultBody = await submitRegistration(payload);
         }
 

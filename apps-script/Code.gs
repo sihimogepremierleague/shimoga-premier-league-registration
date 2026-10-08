@@ -45,7 +45,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-08-fast-submit";
+const DEPLOY_MARKER = "2026-10-08-direct-submit";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -93,22 +93,25 @@ const LOCK_WAIT_MS = 20000;
 // Fast submission: a registration is posted to the Form's public /formResponse
 // endpoint (one HTTP call, ~1 s) instead of ~40 FormApp calls (~4 s). The
 // title -> entry id map is cached in Script Properties, refreshed in the
-// background by the website's warm-up request, and only used while fresh.
+// background by the website's prepare request, and only used while fresh.
+// The website normally posts to /formResponse itself; Apps Script uses the
+// same map on its fallback path.
 const FORM_MAP_KEY = "formMap";
 const FORM_MAP_REFRESH_MS = 10 * 60 * 1000;
 const FORM_MAP_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FORM_MAP_REFRESHING_KEY = "formMapRefreshing";
 
-// Background uploads: the website uploads the photo and document while the
-// player fills in the form and submits only signed tokens for them.
+// Direct uploads: the website PUTs the photo and document straight to Drive
+// resumable-upload URLs created here, so Submit never waits on Apps Script.
 const UPLOAD_KINDS = { photo: "Display Photo", document: "Document" };
-const UPLOAD_SECRET_KEY = "uploadTokenSecret";
-// Tokens expire well before cleanupOrphanUploads may trash their files.
-const UPLOAD_TOKEN_MAX_AGE_MS = 20 * 60 * 60 * 1000;
+const DRIVE_UPLOAD_URL =
+  "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,mimeType,size";
+// Uploads keep this prefix until a registration links them; only pending
+// uploads can be discarded.
+const PENDING_UPLOAD_PREFIX = "pending_";
+const MAX_SESSIONS_PER_KIND = 3;
+const MAX_SESSION_REQUESTS_PER_MINUTE = 120;
 const ORPHAN_UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-// Script property per pre-uploaded file linked by a registration, so a
-// replayed "discard" request cannot trash it.
-const CLAIMED_KEY_PREFIX = "claimed:";
 
 const DUPLICATE_MESSAGE =
   "A registration with this name and mobile number already exists. " +
@@ -132,7 +135,10 @@ const EXPECTED_TITLES = [
  * GET handler.
  *   /exec                      -> fast liveness check (no Form/Drive access)
  *   /exec?warm=1               -> liveness check that also refreshes a stale
- *                                 Form entry map (sent while the player types)
+ *                                 Form entry map
+ *   /exec?prepare=1&origin=<o> -> Form entry map + Drive upload URLs, fetched
+ *                                 by the website as soon as it opens
+ *   /exec?check=1&name=&mobile= -> background duplicate pre-check
  *   /exec?diagnostics=1        -> full configuration check with timings
  *   /exec?submissionId=<id>    -> whether that submission was recorded
  *
@@ -152,6 +158,9 @@ function doGet(e) {
       submissionId: id
     });
   }
+
+  if (params.prepare) return handlePrepare(params);
+  if (params.check) return handleCheck(params);
 
   if (!params.diagnostics) {
     if (params.warm) {
@@ -230,7 +239,11 @@ function doGet(e) {
     diagnostics.registrationIndexReady = keys.indexOf(REGISTRATION_INDEX_READY_KEY) !== -1;
     diagnostics.indexedMobileNumbers = keys
       .filter(function (key) { return key.indexOf(REGISTRATION_KEY_PREFIX) === 0; }).length;
-    diagnostics.uploadSecretReady = keys.indexOf(UPLOAD_SECRET_KEY) !== -1;
+    const handlers = ScriptApp.getProjectTriggers().map(function (trigger) {
+      return trigger.getHandlerFunction();
+    });
+    diagnostics.submitTriggerInstalled = handlers.indexOf("onRegistrationSubmit") !== -1;
+    diagnostics.cleanupTriggerInstalled = handlers.indexOf("cleanupOrphanUploads") !== -1;
     const rawMap = properties.getProperty(FORM_MAP_KEY);
     const map = rawMap ? JSON.parse(rawMap) : null;
     diagnostics.fastSubmit = {
@@ -249,26 +262,23 @@ function doGet(e) {
 
 /**
  * POST handler.
- *   { action: "upload", kind: "photo" | "document", file: <data URL>, name, mobile }
- *       -> saves one file to Drive while the player is still filling in the
- *          form and returns a signed upload token
- *   { action: "discard", kind, upload: <token> }
- *       -> trashes a background upload the player replaced or removed, unless
- *          a registration already links to it
- *   { name, mobile, ..., photoUpload: <token>, documentUpload: <token> }
- *       -> registers the player. `photo` / `document` data URLs are still
- *          accepted instead of tokens (fallback for failed background uploads)
+ *   { action: "discard", fileId }
+ *       -> trashes a direct upload the player replaced or removed, unless a
+ *          registration already links to it
+ *   { name, mobile, ..., photoFileId, documentFileId }
+ *       -> registers the player (fallback when the website cannot post to the
+ *          Form itself). `photo` / `document` data URLs are accepted instead of
+ *          file ids when a direct upload failed.
  */
 function doPost(e) {
   const data = parseRequestPayload(e);
-  if (data && data.action === "upload") return handleUpload(data);
   if (data && data.action === "discard") return handleDiscard(data);
   return handleRegistration(data);
 }
 
 function handleRegistration(data) {
   // Only files uploaded inline by this request; pre-uploaded files are kept on
-  // failure so the browser can retry with the same token.
+  // failure so the browser can retry with the same file ids.
   const savedFiles = [];
   const lock = LockService.getScriptLock();
   const timings = createTimings();
@@ -283,8 +293,8 @@ function handleRegistration(data) {
       throw new Error("Invalid submission id.");
     }
 
-    // One Script Properties read serves the retry check, the duplicate index,
-    // the Form entry map and the upload token secret.
+    // One Script Properties read serves the retry check, the duplicate index
+    // and the Form entry map.
     const properties = PropertiesService.getScriptProperties();
     const snapshot = properties.getProperties();
     timings.mark("readProperties");
@@ -307,6 +317,12 @@ function handleRegistration(data) {
     } else {
       // Fail before writing anything to Drive if the form is misconfigured.
       validateFormForFormApp(openForm());
+    }
+
+    // The website's own post to the Form failed with a network error, so it
+    // may still have been recorded; do not save the player a second time.
+    if (data.formResponseAttempted === true && hasExistingRegistration(openForm(), data.name, data.mobile)) {
+      return jsonResponse({ status: "success", alreadyRecorded: true });
     }
 
     let indexedNames;
@@ -334,9 +350,8 @@ function handleRegistration(data) {
 
     // Uploads run before taking the lock so concurrent registrations do not
     // queue behind each other's Drive writes.
-    const secret = snapshot[UPLOAD_SECRET_KEY] || "";
-    const photoUrl = resolveUpload(data, "photo", secret, savedFiles);
-    const documentUrl = resolveUpload(data, "document", secret, savedFiles);
+    const photoUrl = resolveUpload(data, "photo", savedFiles);
+    const documentUrl = resolveUpload(data, "document", savedFiles);
     timings.mark("files");
 
     const answers = buildAnswers(data, photoUrl, documentUrl);
@@ -384,11 +399,6 @@ function handleRegistration(data) {
     if (submissionId) {
       updates[SUBMISSION_KEY_PREFIX + submissionId] = new Date().toISOString();
     }
-    // Pre-uploaded files linked by this registration can no longer be discarded.
-    ["photo", "document"].forEach(function (kind) {
-      const info = data[kind + "Upload"] && verifyUpload(data[kind + "Upload"], kind, secret);
-      if (info) updates[CLAIMED_KEY_PREFIX + info.id] = "1";
-    });
     try {
       properties.setProperties(updates);
     } catch (err) {
@@ -810,6 +820,16 @@ function buildFormMap(form) {
     buildAnswers({}, "", "").forEach(function (answer) {
       map.entries[answer.title] = describeFormEntry(form, answer);
     });
+    // A required question the website does not fill in would make Google
+    // reject every fast submission, which the website cannot see.
+    const expected = {};
+    EXPECTED_TITLES.forEach(function (title) { expected[title.toLowerCase()] = true; });
+    index.all.forEach(function (entry) {
+      if (expected[entry.title.trim().toLowerCase()]) return;
+      if (isRequiredItem(entry.item, entry.type)) {
+        throw new Error("required question \"" + entry.title + "\" is not filled in by the website");
+      }
+    });
     map.fastSubmit = true;
   } catch (err) {
     map.reason = err && err.message ? err.message : String(err);
@@ -829,7 +849,7 @@ function describeFormEntry(form, answer) {
     const item = findItem(form, answer.title, candidates[i]);
     if (!item) continue;
 
-    const entry = { type: String(candidates[i]) };
+    const entry = { type: String(candidates[i]), required: isRequiredItem(item, candidates[i]) };
     let itemResponse;
     if (candidates[i] === types.DATE) {
       const dateItem = item.asDateItem();
@@ -853,6 +873,24 @@ function describeFormEntry(form, answer) {
     return entry;
   }
   throw new Error("\"" + answer.title + "\" has an unsupported question type");
+}
+
+// Items that are not questions can never be required.
+const NON_QUESTION_TYPES = ["SECTION_HEADER", "PAGE_BREAK", "IMAGE", "VIDEO"];
+const REQUIRED_CASTS = {
+  TEXT: "asTextItem", PARAGRAPH_TEXT: "asParagraphTextItem", MULTIPLE_CHOICE: "asMultipleChoiceItem",
+  LIST: "asListItem", CHECKBOX: "asCheckboxItem", DATE: "asDateItem", DATETIME: "asDateTimeItem",
+  TIME: "asTimeItem", DURATION: "asDurationItem", SCALE: "asScaleItem", GRID: "asGridItem",
+  CHECKBOX_GRID: "asCheckboxGridItem", RATING: "asRatingItem"
+};
+
+// Unknown question types (e.g. File upload) are treated as required.
+function isRequiredItem(item, type) {
+  const name = String(type);
+  if (NON_QUESTION_TYPES.indexOf(name) !== -1) return false;
+  const cast = REQUIRED_CASTS[name];
+  if (!cast || typeof item[cast] !== "function") return true;
+  return item[cast]().isRequired();
 }
 
 function getUsableFormMap(raw) {
@@ -943,54 +981,143 @@ function submitViaFormResponse(formMap, answers) {
   return "unknown";
 }
 
-/* ---------- Background uploads ---------- */
+/* ---------- Direct-to-Drive uploads ---------- */
 
-function handleUpload(data) {
-  const started = Date.now();
+/**
+ * Creates Drive resumable upload sessions in the upload folder. The website
+ * PUTs each file straight to its session URL (Google's upload servers answer
+ * CORS requests from the origin given here), so files never pass through
+ * Apps Script and the player does not wait for it. Each URL takes one file
+ * and expires after a week; unused URLs leave nothing behind.
+ */
+function createUploadSessions(kinds, count, origin) {
+  const folderId = getUploadFolder().getId();
+  const token = ScriptApp.getOAuthToken();
+  const stamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyyMMdd-HHmmss");
+  const requests = [];
+  const requestKinds = [];
+  kinds.forEach(function (kind) {
+    for (let i = 0; i < count; i++) {
+      requestKinds.push(kind);
+      requests.push({
+        url: DRIVE_UPLOAD_URL,
+        method: "post",
+        contentType: "application/json; charset=UTF-8",
+        headers: { Authorization: "Bearer " + token, Origin: origin },
+        payload: JSON.stringify({
+          // Renamed with the player's details once a registration links it.
+          name: PENDING_UPLOAD_PREFIX + stamp + "_" + slugify(UPLOAD_KINDS[kind]) + "_" +
+            Utilities.getUuid().slice(0, 8),
+          parents: [folderId]
+        }),
+        muteHttpExceptions: true
+      });
+    }
+  });
+
+  const sessions = {};
+  kinds.forEach(function (kind) { sessions[kind] = []; });
+  UrlFetchApp.fetchAll(requests).forEach(function (response, i) {
+    const headers = response.getHeaders();
+    const location = headers.Location || headers.location;
+    if (response.getResponseCode() === 200 && location) {
+      sessions[requestKinds[i]].push(location);
+    } else {
+      console.warn("Could not create an upload session: HTTP " + response.getResponseCode());
+    }
+  });
+  return sessions;
+}
+
+// Everything the website needs to register without waiting on Apps Script.
+function handlePrepare(params) {
+  const result = { status: "ok", deployedVersion: DEPLOY_MARKER, serverTime: Date.now() };
   try {
-    const title = UPLOAD_KINDS[data.kind];
-    if (!title) throw new Error("Unknown upload type.");
-    const file = decodeUpload(title, data.file);
-
-    // Name and mobile are optional here; they only make Drive file names readable.
-    const mobile = typeof data.mobile === "string" && /^[0-9]{10}$/.test(data.mobile) ? data.mobile : "";
-    const name = typeof data.name === "string"
-      ? data.name.trim().replace(/\s+/g, " ").slice(0, MAX_NAME_LENGTH) : "";
-    const stamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyyMMdd-HHmmss");
-    const owner = uploadOwner(mobile, name);
-    const ext = getFileExtensionFromMime(file.mimeType);
-
-    const saved = getUploadFolder().createFile(
-      Utilities.newBlob(file.bytes, file.mimeType, uploadFileName(stamp, owner, title, ext))
-    );
-    const info = {
-      v: 1, kind: data.kind, id: saved.getId(), url: saved.getUrl(),
-      stamp: stamp, owner: owner, ext: ext, ts: Date.now()
-    };
-    return jsonResponse({
-      status: "success",
-      upload: signUpload(info, getUploadSecret()),
-      timingsMs: { total: Date.now() - started }
-    });
+    refreshFormMapIfStale();
   } catch (err) {
-    console.error(err);
-    return jsonResponse({ status: "error", message: err && err.message ? err.message : String(err) });
+    console.warn("Could not refresh the Form entry map: " + err);
   }
+  const map = getUsableFormMap(PropertiesService.getScriptProperties().getProperty(FORM_MAP_KEY));
+  if (map) {
+    result.formMap = { url: map.url, pageHistory: map.pageHistory || "", entries: map.entries };
+  }
+
+  const origin = String(params.origin || "");
+  const kinds = String(params.kinds == null ? "photo,document" : params.kinds).split(",").filter(function (kind) {
+    return UPLOAD_KINDS[kind];
+  });
+  if (kinds.length && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(origin) && allowSessionRequest()) {
+    const count = Math.min(Math.max(Number(params.count) || 2, 1), MAX_SESSIONS_PER_KIND);
+    try {
+      result.sessions = createUploadSessions(kinds, count, origin);
+    } catch (err) {
+      console.warn("Could not create upload sessions: " + err);
+    }
+  }
+  return jsonResponse(result);
+}
+
+// Upload URLs accept files of any size, so how many can be handed out is
+// capped. Over the cap the website simply uses the Apps Script path.
+function allowSessionRequest() {
+  const cache = CacheService.getScriptCache();
+  const key = "sessionRequests:" + Math.floor(Date.now() / 60000);
+  const count = Number(cache.get(key) || 0);
+  if (count >= MAX_SESSION_REQUESTS_PER_MINUTE) {
+    console.warn("Upload URL rate limit reached.");
+    return false;
+  }
+  cache.put(key, String(count + 1), 120);
+  return true;
+}
+
+// Background duplicate pre-check while the player is still filling in the form.
+function handleCheck(params) {
+  const name = typeof params.name === "string" ? params.name.trim().replace(/\s+/g, " ") : "";
+  const mobile = String(params.mobile || "");
+  if (!name || !/^[0-9]{10}$/.test(mobile)) {
+    return jsonResponse({ status: "error", message: "Name and a 10-digit mobile are required." });
+  }
+  const names = readIndexedNames(PropertiesService.getScriptProperties(), mobile);
+  const duplicate = names.indexOf(normalizeRegistrationName(name)) !== -1 &&
+    hasExistingRegistration(FormApp.openById(GOOGLE_FORM_ID), name, mobile);
+  return jsonResponse({
+    status: "ok",
+    duplicate: duplicate,
+    message: duplicate ? DUPLICATE_MESSAGE : ""
+  });
+}
+
+// Returns the Drive file for an id the website uploaded directly, or null if
+// the id is not a file in the upload folder (or was trashed, unless allowed).
+function findUploadedFile(fileId, allowTrashed) {
+  if (typeof fileId !== "string" || !/^[-\w]{10,}$/.test(fileId)) return null;
+  try {
+    const file = DriveApp.getFileById(fileId);
+    if (!allowTrashed && file.isTrashed()) return null;
+    const folderId = getUploadFolder().getId();
+    const parents = file.getParents();
+    while (parents.hasNext()) {
+      if (parents.next().getId() === folderId) return file;
+    }
+  } catch (err) {
+    // Unknown or inaccessible id.
+  }
+  return null;
 }
 
 // The website calls this when a player replaces or removes a file that was
-// already uploaded, so only the final copy stays in Drive. Anything missed
-// here (closed tab, lost request) is trashed later by cleanupOrphanUploads.
+// already uploaded, so only the final copy stays in Drive. Only unclaimed
+// ("pending_") files can be discarded, never one a registration links to.
+// Anything missed here is trashed later by cleanupOrphanUploads.
 function handleDiscard(data) {
   try {
-    if (!UPLOAD_KINDS[data.kind]) throw new Error("Unknown upload type.");
-    const properties = PropertiesService.getScriptProperties();
-    const info = verifyUpload(data.upload, data.kind, properties.getProperty(UPLOAD_SECRET_KEY));
-    if (!info) throw new Error("Invalid or expired upload token.");
-    if (properties.getProperty(CLAIMED_KEY_PREFIX + info.id) !== null) {
+    const file = findUploadedFile(data.fileId);
+    if (!file) throw new Error("Unknown upload.");
+    if (file.getName().indexOf(PENDING_UPLOAD_PREFIX) !== 0) {
       return jsonResponse({ status: "success", trashed: false });
     }
-    DriveApp.getFileById(info.id).setTrashed(true);
+    file.setTrashed(true);
     return jsonResponse({ status: "success", trashed: true });
   } catch (err) {
     console.warn("Discard failed: " + err);
@@ -998,27 +1125,28 @@ function handleDiscard(data) {
   }
 }
 
-// Returns the Drive link for the photo or document of a registration.
-function resolveUpload(data, kind, secret, savedFiles) {
+// Returns the Drive link for the photo or document of a registration sent
+// through Apps Script (the fallback path).
+function resolveUpload(data, kind, savedFiles) {
   const title = UPLOAD_KINDS[kind];
-  const token = data[kind + "Upload"];
-  if (token) {
-    const info = verifyUpload(token, kind, secret);
-    if (!info) {
-      const err = new Error("Your " + title.toLowerCase() + " upload has expired. Please try again.");
-      err.code = "upload_invalid";
-      throw err;
-    }
-    renameUploadIfNeeded(info, data, title);
-    return info.url;
+  const fileId = data[kind + "FileId"];
+  if (fileId) {
+    const file = findUploadedFile(fileId);
+    if (!file) throw new Error("Your " + title.toLowerCase() + " upload was not found. Please choose it again.");
+    claimUpload(file, title, data.name, data.mobile, Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyyMMdd-HHmmss"));
+    return driveFileLink(file.getId());
   }
   if (!data[kind]) return "";
 
-  const file = decodeUpload(title, data[kind]);
-  const fileName = buildFilePrefix(data) + "_" + slugify(title) + getFileExtensionFromMime(file.mimeType);
-  const saved = getUploadFolder().createFile(Utilities.newBlob(file.bytes, file.mimeType, fileName));
+  const upload = decodeUpload(title, data[kind]);
+  const fileName = buildFilePrefix(data) + "_" + slugify(title) + getFileExtensionFromMime(upload.mimeType);
+  const saved = getUploadFolder().createFile(Utilities.newBlob(upload.bytes, upload.mimeType, fileName));
   savedFiles.push(saved);
   return saved.getUrl();
+}
+
+function driveFileLink(id) {
+  return "https://drive.google.com/file/d/" + id + "/view?usp=drivesdk";
 }
 
 function decodeUpload(title, value) {
@@ -1046,64 +1174,66 @@ function uploadFileName(stamp, owner, title, ext) {
   return [stamp, owner, slugify(title)].filter(Boolean).join("_") + ext;
 }
 
-// Files are uploaded before the player finishes typing, so the final name or
-// mobile can differ from the one in the Drive file name.
-function renameUploadIfNeeded(info, data, title) {
-  const owner = uploadOwner(data.mobile, data.name);
-  if (owner === info.owner) return;
+// Gives a "pending_" upload its final name, which also stops it from being
+// discarded. Files already claimed are left alone.
+function claimUpload(file, title, name, mobile, stamp) {
   try {
-    DriveApp.getFileById(info.id).setName(uploadFileName(info.stamp, owner, title, info.ext));
+    // A response may link a file the cleanup trashed while the page was open.
+    if (file.isTrashed()) file.setTrashed(false);
+    if (file.getName().indexOf(PENDING_UPLOAD_PREFIX) !== 0) return;
+    const ext = getFileExtensionFromMime(String(file.getMimeType()).toLowerCase());
+    file.setName(uploadFileName(stamp, uploadOwner(mobile, name), title, ext));
   } catch (err) {
-    console.warn("Could not rename upload " + info.id + ": " + err);
+    console.warn("Could not rename upload " + file.getId() + ": " + err);
   }
 }
 
-// Tokens are signed so a registration can only link files this script saved.
-function signUpload(info, secret) {
-  const payload = JSON.stringify(info);
-  return { payload: payload, sig: computeUploadSignature(payload, secret) };
-}
+/**
+ * Installable "On form submit" trigger (created by setup()). Registrations
+ * sent straight from the website to the Form are finished here, after the
+ * player has already seen the confirmation: linked uploads get their final
+ * names and the duplicate-check index is updated.
+ */
+function onRegistrationSubmit(e) {
+  const answers = {};
+  e.response.getItemResponses().forEach(function (itemResponse) {
+    answers[itemResponse.getItem().getTitle()] = String(itemResponse.getResponse() || "");
+  });
+  const name = (answers.Name || "").trim().replace(/\s+/g, " ");
+  const mobile = (answers["Mobile Number"] || "").trim();
+  const stamp = Utilities.formatDate(e.response.getTimestamp(), "Asia/Kolkata", "yyyyMMdd-HHmmss");
 
-function computeUploadSignature(payload, secret) {
-  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, secret));
-}
+  FILE_LINK_TITLES.forEach(function (title) {
+    extractDriveIds(answers[title] || "").forEach(function (id) {
+      const file = findUploadedFile(id, true);
+      if (file) claimUpload(file, title, name, mobile, stamp);
+    });
+  });
 
-function verifyUpload(token, kind, secret) {
-  if (!secret || !token || typeof token.payload !== "string" || typeof token.sig !== "string") return null;
-  const expected = computeUploadSignature(token.payload, secret);
-  if (expected.length !== token.sig.length) return null;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ token.sig.charCodeAt(i);
-  if (diff) return null;
-
-  let info;
+  if (!name || !/^[0-9]{10}$/.test(mobile)) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(LOCK_WAIT_MS);
   try {
-    info = JSON.parse(token.payload);
-  } catch (err) {
-    return null;
+    const properties = PropertiesService.getScriptProperties();
+    const names = readIndexedNames(properties, mobile);
+    const normalized = normalizeRegistrationName(name);
+    if (names.indexOf(normalized) === -1) {
+      properties.setProperty(REGISTRATION_KEY_PREFIX + mobile, JSON.stringify(names.concat([normalized])));
+    } else {
+      // Already indexed: either the Apps Script path indexed it, or this is a
+      // duplicate that slipped past the website's background pre-check.
+      console.log("Registration for " + mobile + " / " + normalized + " was already indexed.");
+    }
+  } finally {
+    lock.releaseLock();
   }
-  if (!info || info.kind !== kind || typeof info.id !== "string" || typeof info.url !== "string") return null;
-  const age = Date.now() - info.ts;
-  // Older tokens may point at files already removed by cleanupOrphanUploads.
-  if (!(age >= -5 * 60 * 1000 && age <= UPLOAD_TOKEN_MAX_AGE_MS)) return null;
-  return info;
-}
-
-function getUploadSecret() {
-  const properties = PropertiesService.getScriptProperties();
-  let secret = properties.getProperty(UPLOAD_SECRET_KEY);
-  if (!secret) {
-    secret = Utilities.getUuid() + Utilities.getUuid();
-    properties.setProperty(UPLOAD_SECRET_KEY, secret);
-  }
-  return secret;
 }
 
 /**
  * Trashes uploads that no Form response links to and that are older than
- * ORPHAN_UPLOAD_MAX_AGE_MS, i.e. background uploads from players who never
- * submitted. Trashed files can be restored from Drive for 30 days.
- * Scheduled by installCleanupTrigger(); can also be run from the editor.
+ * ORPHAN_UPLOAD_MAX_AGE_MS, i.e. uploads from players who never submitted.
+ * Trashed files can be restored from Drive for 30 days.
+ * Scheduled by setup(); can also be run from the editor.
  */
 function cleanupOrphanUploads() {
   const form = FormApp.openById(GOOGLE_FORM_ID);
@@ -1125,15 +1255,32 @@ function cleanupOrphanUploads() {
 
   const cutoff = Date.now() - ORPHAN_UPLOAD_MAX_AGE_MS;
   const files = getUploadFolder().getFiles();
-  let trashed = 0;
+  let removed = 0;
   while (files.hasNext()) {
     const file = files.next();
-    if (referenced[file.getId()] || file.getDateCreated().getTime() > cutoff) continue;
-    file.setTrashed(true);
-    trashed++;
+    if (referenced[file.getId()]) continue;
+    if (file.getSize() > MAX_UPLOAD_BYTES) {
+      // Upload URLs accept any size; delete oversized files permanently so
+      // they do not keep using Drive storage from the trash.
+      deleteFilePermanently(file);
+    } else if (file.getDateCreated().getTime() <= cutoff) {
+      file.setTrashed(true);
+    } else {
+      continue;
+    }
+    removed++;
   }
-  console.log("Trashed " + trashed + " unused upload(s).");
-  return trashed;
+  console.log("Removed " + removed + " unused upload(s).");
+  return removed;
+}
+
+function deleteFilePermanently(file) {
+  const response = UrlFetchApp.fetch("https://www.googleapis.com/drive/v3/files/" + file.getId(), {
+    method: "delete",
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (response.getResponseCode() >= 300) file.setTrashed(true);
 }
 
 function extractDriveIds(text) {
@@ -1144,12 +1291,16 @@ function extractDriveIds(text) {
   return ids;
 }
 
-function installCleanupTrigger() {
+function installTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "cleanupOrphanUploads") ScriptApp.deleteTrigger(trigger);
+    const handler = trigger.getHandlerFunction();
+    if (handler === "cleanupOrphanUploads" || handler === "onRegistrationSubmit") {
+      ScriptApp.deleteTrigger(trigger);
+    }
   });
-  ScriptApp.newTrigger("cleanupOrphanUploads").timeBased().everyHours(6).create();
-  console.log("cleanupOrphanUploads scheduled every 6 hours.");
+  ScriptApp.newTrigger("cleanupOrphanUploads").timeBased().everyHours(1).create();
+  ScriptApp.newTrigger("onRegistrationSubmit").forForm(GOOGLE_FORM_ID).onFormSubmit().create();
+  console.log("Triggers installed: cleanupOrphanUploads every hour, onRegistrationSubmit on form submit.");
 }
 
 /**
@@ -1160,12 +1311,11 @@ function installCleanupTrigger() {
  */
 function setup() {
   setupUploadFolder();
-  getUploadSecret();
   if (!PropertiesService.getScriptProperties().getProperty(REGISTRATION_INDEX_READY_KEY)) {
     rebuildRegistrationIndex();
   }
   refreshFormMap();
-  installCleanupTrigger();
+  installTriggers();
 }
 
 // Parses YYYY-MM-DD as a UTC date; returns null for malformed or impossible dates.

@@ -26,11 +26,10 @@ The page is intentionally designed as a tournament registration page, not as an 
   and again in Apps Script). Large document images (400 KB or more) are resized
   in the browser to at most 2000 px and re-encoded as JPEG before upload; PDFs
   are sent unchanged
-- Fast registration (typically 3–5 s after Submit instead of 12–15 s): the photo and
-  Aadhaar upload to Drive in the background while the player fills in the form,
-  and the response is saved with one request to the Form's `/formResponse`
-  address. See [Troubleshooting](#troubleshooting-sorry-unable-to-open-the-file-at-this-time-404)
-  and the expected flow in section 6
+- Fast registration (typically 1–3 s after Submit): Submit never waits on Apps Script,
+  whose response time varies from about 1 s to over 40 s. The photo and Aadhaar
+  upload straight to Google Drive as soon as they are chosen, and Submit posts the
+  answers straight to the Google Form. See [How registration works](#how-registration-works)
 - Tapping **Add Photo** (or the empty photo box) opens a sheet offering
   **Take Photo** or **Choose from Gallery**, the same on every device.
   For Take Photo, phones and tablets open the native camera; desktops show a live camera preview
@@ -143,11 +142,12 @@ no player waits for it:
 - creates the `SPL Registration Uploads` folder in your My Drive (uploads are
   owned by you and stay private; set `UPLOAD_FOLDER_ID` in `Code.gs` to use an
   existing folder instead);
-- creates the secret used to sign background-upload tokens;
 - builds the duplicate-check index from existing Form responses if it does not
   exist yet;
 - builds the Form entry map used for fast submission (`refreshFormMap`);
-- schedules `cleanupOrphanUploads` to run every 6 hours.
+- installs two triggers: `onRegistrationSubmit` (runs on every Form submission,
+  gives the uploaded files their final names and updates the duplicate-check
+  index) and `cleanupOrphanUploads` (every hour).
 
 Run `setup` again whenever Google asks for new permissions after a code or
 manifest change, then deploy a **new version**. The manifest is saved with each
@@ -158,8 +158,8 @@ Google Form, and `refreshFormMap` after changing Form questions (the website als
 refreshes the map in the background every 10 minutes).
 
 > **Fast submission needs a public form.** The Google Form must not collect email
-> addresses or require sign-in. Otherwise the script falls back to the slower
-> FormApp path, and `/exec?diagnostics=1` shows the reason under `fastSubmit`.
+> addresses or require sign-in. Otherwise the website and script fall back to the
+> slower Apps Script path, and `/exec?diagnostics=1` shows the reason under `fastSubmit`.
 
 Copy the Web app URL.
 
@@ -187,7 +187,7 @@ Open the Web app `/exec` URL directly in a browser. It returns a fast liveness
 check that does not touch the Form or Drive:
 
 ```json
-{ "status": "ok", "deployedVersion": "2026-10-08-fast-submit" }
+{ "status": "ok", "deployedVersion": "2026-10-08-direct-submit" }
 ```
 
 For the full configuration check, open `/exec?diagnostics=1`, for example:
@@ -195,7 +195,7 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-08-fast-submit",
+  "deployedVersion": "2026-10-08-direct-submit",
   "timingsMs": { "openForm": 400, "readItems": 300, "readResponses": 900, "duplicateScan": 1200, "checkDrive": 500, "total": 3300 },
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
@@ -208,7 +208,8 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
   "recordedSubmissionIds": 12,
   "registrationIndexReady": true,
   "indexedMobileNumbers": 12,
-  "uploadSecretReady": true,
+  "submitTriggerInstalled": true,
+  "cleanupTriggerInstalled": true,
   "fastSubmit": { "enabled": true, "reason": "", "mapAgeMinutes": 3 }
 }
 ```
@@ -229,9 +230,10 @@ Check that:
   published `1FAIpQLS...` id instead of the edit id.
 - `fastSubmit.enabled` is `true`. If it is `false`, `reason` says why (for
   example the form collects email addresses); run `refreshFormMap` after fixing it.
-- `uploadSecretReady` is `true` (run `setup` if it is not). Without it,
-  background uploads cannot be linked and the website falls back to uploading
-  files at Submit.
+- `submitTriggerInstalled` and `cleanupTriggerInstalled` are `true` (run `setup`
+  if not). Without the submit trigger, registrations still work, but uploaded
+  files keep their `pending_...` names and the duplicate index is not updated
+  for registrations posted straight from the website.
 
 Each successful registration also returns `route` (`formResponse` or `formApp`)
 and `timingsMs` (per-step server time), visible in the browser's Network tab and
@@ -241,9 +243,8 @@ logged in **Executions**, so you can see where the time goes.
 number of Form responses, but registrations only run that scan to confirm a
 likely duplicate; new players are checked against the index. Check that
 `registrationIndexReady` is `true` (run `rebuildRegistrationIndex` if it is not).
-Each submission id, each indexed mobile number and each claimed upload uses one
-script property (about 40–60 bytes each, roughly 200 bytes per registration, so
-the 500 KB property quota holds about 2,000 registrations).
+Each submission id and each indexed mobile number uses one script property
+(about 60 bytes of the 500 KB property quota, i.e. several thousand registrations).
 
 If you get a raw HTML error page instead of JSON, the script is throwing before
 it can respond. That page has no CORS header, so the browser reports it on the
@@ -259,41 +260,67 @@ node --test tests/registration.test.cjs
 
 Open the website and submit a test registration.
 
-Expected flow:
+Then check, in the browser's developer tools **Network** tab, that Submit sends
+a `PUT` to `www.googleapis.com/upload/drive/...` for each file (status 200) and
+one `POST` to `docs.google.com/forms/.../formResponse`, and that the new row
+appears in the Form responses with working Drive links. A few seconds later the
+two files in the upload folder should be renamed from `pending_...` to
+`<date>_<mobile>_<name>_display-photo.jpg` / `..._document.pdf`.
 
-1. User fills the custom website form. As soon as the photo / Aadhaar are chosen
-   (and name and mobile are filled in), the page uploads them to Drive in the
-   background; Apps Script returns a signed token for each file.
-2. User clicks Submit Registration. Only a small text record with the two tokens
-   is sent (if a background upload failed, that file is sent inline instead).
-3. Apps Script checks for duplicates and posts the answers to the Form's
-   `/formResponse` address in one request. If Google rejects it, FormApp saves it
-   instead; if the outcome is unknown (timeout / server error), the script first
-   checks the Form so the player is never saved twice.
-4. Google Form records the response.
-5. User is taken to the success page (`success.html`) with a
-   "You're registered!" confirmation and a summary of their registration.
+## How registration works
 
-What happens to files in unusual cases:
+1. **When the page opens**, it asks Apps Script in the background
+   (`/exec?prepare=1`) for the Form's question map and two Drive upload URLs
+   per file type. Players take minutes to fill in the form, so even a very slow
+   Apps Script answer arrives in time.
+2. **When the photo or Aadhaar is chosen**, the page uploads it straight to
+   Google Drive with one of those URLs (Google's upload servers, not Apps
+   Script). The file is saved as `pending_...` in the private upload folder.
+3. **When name and mobile are filled in**, the page asks Apps Script in the
+   background whether that player is already registered.
+4. **On Submit**, the page waits only for an upload that is still running, then
+   posts all answers (with the two Drive links) straight to the Google Form's
+   `/formResponse` address. Google Forms does not let the page read its reply,
+   so every answer is first checked against the Form's questions, choices and
+   required flags (from a map at most 30 minutes old; the page refreshes it every
+   10 minutes in the background). Fast submission is switched off entirely if the
+   Form has a required question the website does not fill in.
+   The player is taken to the success page.
+5. **Right after**, the `onRegistrationSubmit` trigger renames the two files with
+   the player's details and adds the player to the duplicate-check index.
 
-- **A background upload fails** (network drop, Apps Script error): the page
-  retries once. If it still fails, nothing is shown to the player; at Submit
-  that file is sent inline with the registration (the original, slower path).
-  If the file itself is invalid (wrong type, over 5 MB), Submit reports the error.
+Submit uses the slower Apps Script path instead (the page shows "this can take
+a little longer") when the page could not get the question map or upload URLs
+from Apps Script, when a direct upload failed, or when an answer does not match
+the Form. Apps Script then saves any missing file itself and submits the response.
+
+What happens in unusual cases:
+
+- **A direct upload fails** (network drop): the page tries again with another
+  upload URL. If it still fails, that file is sent through Apps Script at Submit.
 - **Submit is pressed while an upload is still running**: the page waits for it
-  ("Finishing your photo and document upload…") and then submits.
-- **An upload token is older than 20 hours** (page left open overnight): the
-  script answers `upload_invalid` and the page resends both files inline.
+  ("Finishing your photo and document upload…"); this is limited by the
+  player's upload speed, not by Apps Script.
+- **The player is already registered**: if the background check has answered
+  (it is given up to 1.5 s at Submit), Submit shows the duplicate message.
+  Otherwise the registration is saved and appears twice in the Form responses.
 - **The player replaces or removes a photo or Aadhaar**: the page sends a
   `discard` request and the old file is trashed straight away (if its upload is
-  still running, as soon as it finishes). A file linked by a submitted
-  registration is recorded as `claimed:<fileId>` in Script Properties and is
-  never discarded. Photo uploads wait for a 1.2 s pause, so adjusting the crop
-  several times uploads only the final photo.
+  still running, as soon as it finishes). Only `pending_...` files in the upload
+  folder can be discarded, so a file linked by a registration is never touched.
+  Photo uploads wait for a 1.2 s pause, so adjusting the crop several times
+  uploads only the final photo.
+- **The page was left open for more than 12 hours**: uploads are not reused
+  (the cleanup may have trashed them); Submit sends the files through Apps Script.
+  If a response ever links a trashed upload, the submit trigger restores it.
 - **Anything missed** (tab closed, lost discard request, player never submits):
   `cleanupOrphanUploads` moves files that no response links to into the Drive
   trash after 24 hours (they can be restored from the trash for 30 days). Files
   of responses you delete from the Form are treated the same way.
+- **Abuse of upload URLs**: Drive upload URLs cannot limit file size, so Apps
+  Script hands out at most 120 batches of upload URLs per minute (beyond that the
+  website uses the Apps Script path), and the hourly cleanup permanently deletes
+  any unlinked file over 5 MB so it does not keep using storage from the trash.
 
 Also verify that a 9-digit number or a number containing non-digits is rejected,
 and that resubmitting the same name/mobile pair shows a duplicate error without
@@ -328,15 +355,16 @@ The website handles it:
 To keep executions short (and so make these lost responses rare):
 
 - the plain `/exec` health check does not open the Form or Drive;
-- the photo and document are uploaded in the background before Submit, so the
-  registration request is a few hundred bytes and does no Drive writes;
-- the response is saved with one `/formResponse` request instead of ~40 FormApp calls;
+- normally the website does not call Apps Script at Submit at all (see
+  [How registration works](#how-registration-works));
+- on the Apps Script path, directly uploaded files are linked by id instead of
+  re-uploaded, and the response is saved with one `/formResponse` request
+  instead of ~40 FormApp calls;
 - the duplicate check reads a Script Properties index instead of every Form response,
   and all Script Properties are read in one call;
 - the upload folder id is cached instead of searched for on every request;
 - uploads happen outside the script lock, which is held only for the final check and submit;
-- the page warms up the script with a `GET ?warm=1` while the user fills in the form,
-  which also refreshes the Form entry map in the background;
+- the page's background `prepare` request also refreshes the Form entry map;
 - a "busy" reply is retried straight away without the status check.
 
 ## Troubleshooting CORS errors
