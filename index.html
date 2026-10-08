@@ -73,9 +73,17 @@
           </div>
 
           <div class="grid" style="flex: 1; width: 100%;">
-            <label class="field field-full">
+            <label class="field">
               <span>Name <b>*</b></span>
               <input name="name" type="text" autocomplete="name" maxlength="50" placeholder="Enter your full name" required>
+            </label>
+
+            <label class="field">
+              <span>Mobile Number <b>*</b></span>
+              <input name="mobile" id="mobileInput" type="tel" inputmode="numeric"
+                     pattern="[0-9]{10}" minlength="10" maxlength="10" autocomplete="tel-national"
+                     placeholder="10-digit mobile number" required aria-describedby="mobileError">
+              <span class="field-error" id="mobileError" role="alert" hidden></span>
             </label>
 
             <label class="field field-full">
@@ -104,14 +112,6 @@
         </div>
 
         <div class="grid">
-          <label class="field field-full">
-            <span>Mobile Number <b>*</b></span>
-            <input name="mobile" id="mobileInput" type="tel" inputmode="numeric"
-                   pattern="[0-9]{10}" minlength="10" maxlength="10" autocomplete="tel-national"
-                   placeholder="10-digit mobile number" required aria-describedby="mobileError">
-            <span class="field-error" id="mobileError" role="alert" hidden></span>
-          </label>
-
           <label class="field field-full">
             <span>T-Shirt Size <b>*</b></span>
             <select name="tshirtSize" required>
