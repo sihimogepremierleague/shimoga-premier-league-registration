@@ -78,21 +78,21 @@
               <input name="name" type="text" autocomplete="name" maxlength="50" placeholder="Enter your full name" required>
             </label>
 
-            <label class="field">
+            <label class="field field-full">
               <span>Date of Birth <b>*</b></span>
               <input name="dob" id="dobInput" type="date" required aria-describedby="dobError">
               <span class="field-error" id="dobError" role="alert" hidden></span>
             </label>
 
-            <label class="field">
-              <span>Age</span>
-              <input name="age" id="ageInput" type="text" readonly tabindex="-1"
-                     class="readonly-input" placeholder="Calculated from DOB" aria-readonly="true">
-            </label>
+            <div class="eligibility field-full" id="eligibilityInfo" aria-live="polite">
+              <p class="eligibility-title">Eligible categories</p>
+              <ul class="eligibility-list" id="eligibilityList" hidden></ul>
+              <p class="field-hint" id="eligibilityNote">Enter your date of birth to see which categories you can play.</p>
+            </div>
 
             <label class="field field-full">
               <span>Category <b>*</b></span>
-              <select name="category" required>
+              <select name="category" required aria-describedby="eligibilityInfo">
                 <option value="">Select your category</option>
                 <option>G/N Doubles</option>
                 <option>30+ Men's Doubles</option>
@@ -253,6 +253,18 @@
     const CROP_OUTPUT_MAX = 800;
     const MAX_ZOOM = 5;
     const DAY_MS = 24 * 60 * 60 * 1000;
+    // The league is on 6 Dec 2026. Category eligibility uses the player's age on
+    // 5 Jun 2027, which gives every age category a 6-month relaxation.
+    // Keep in sync with TOURNAMENT_AGE_CUTOFF in apps-script/Code.gs.
+    const TOURNAMENT_AGE_CUTOFF = new Date(2027, 5, 5);
+    const TOURNAMENT_AGE_CUTOFF_LABEL = "5 Jun 2027";
+    // Minimum tournament age per category; values must match the Category options.
+    const CATEGORY_MIN_AGES = {
+      "G/N Doubles": 0,
+      "30+ Men's Doubles": 30,
+      "40+ Men's Doubles": 40,
+      "50+ & 35+ Jumble Doubles": 35
+    };
 
     const form = document.getElementById("registrationForm");
     const statusBox = document.getElementById("status");
@@ -281,7 +293,8 @@
     const removePhotoBtn = document.getElementById("removePhotoBtn");
     const dobInput = document.getElementById("dobInput");
     const dobError = document.getElementById("dobError");
-    const ageInput = document.getElementById("ageInput");
+    const eligibilityList = document.getElementById("eligibilityList");
+    const eligibilityNote = document.getElementById("eligibilityNote");
     const mobileInput = document.getElementById("mobileInput");
     const mobileError = document.getElementById("mobileError");
     const documentInput = document.getElementById("documentInput");
@@ -477,6 +490,27 @@
              age.days + (age.days === 1 ? " day" : " days");
     }
 
+    // Pass null to show the prompt shown before a valid DOB is entered.
+    function renderEligibility(tournamentAge) {
+      eligibilityList.replaceChildren();
+      if (!tournamentAge) {
+        eligibilityList.hidden = true;
+        eligibilityNote.textContent = "Enter your date of birth to see which categories you can play.";
+        return;
+      }
+
+      Array.from(form.elements.category.options).forEach((option) => {
+        const minAge = CATEGORY_MIN_AGES[option.value];
+        if (minAge === undefined || tournamentAge.years < minAge) return;
+        const item = document.createElement("li");
+        item.textContent = option.value;
+        eligibilityList.append(item);
+      });
+      eligibilityList.hidden = false;
+      eligibilityNote.textContent = "Based on your age on " + TOURNAMENT_AGE_CUTOFF_LABEL +
+        " (includes a 6-month age relaxation for all categories).";
+    }
+
     function applyDobBounds() {
       const bounds = getDobBounds();
       dobInput.min = toIsoDate(bounds.min);
@@ -507,11 +541,11 @@
       if (showErrors || !message) setFieldError(dobError, message);
 
       if (!dob || message) {
-        ageInput.value = "";
+        renderEligibility(null);
         return "";
       }
-      ageInput.value = formatAge(calculateAge(dob, bounds.today));
-      return ageInput.value;
+      renderEligibility(calculateAge(dob, TOURNAMENT_AGE_CUTOFF));
+      return formatAge(calculateAge(dob, bounds.today));
     }
 
     // Native pickers open on today (or the min date) when empty, which is
@@ -529,6 +563,8 @@
     dobInput.addEventListener("input", () => updateAgeFromDob(false));
     dobInput.addEventListener("change", () => updateAgeFromDob(true));
     dobInput.addEventListener("blur", () => updateAgeFromDob(true));
+    // Browsers can restore the DOB on reload / back navigation without input events.
+    window.addEventListener("pageshow", () => { if (dobInput.value) updateAgeFromDob(false); });
 
     /* ---------- Document ---------- */
 

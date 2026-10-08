@@ -387,18 +387,43 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 4px rgba(45,112,87,.10);
 }
 
-.readonly-input,
-.readonly-input:focus {
-  background: #eef3f0;
-  border-color: var(--line);
-  color: var(--ink);
-  font-weight: 600;
-  box-shadow: none;
-  cursor: default;
+.eligibility {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--gold);
+  border-radius: 13px;
+  background: linear-gradient(145deg, #f6faf7, #edf6f2);
 }
 
-.readonly-input::placeholder {
-  font-weight: 400;
+.eligibility-title {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.eligibility-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.eligibility-list[hidden] {
+  display: none;
+}
+
+.eligibility-list li {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--green);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* iOS Safari renders date inputs centred and collapsed without these. */

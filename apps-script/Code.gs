@@ -13,6 +13,8 @@
  *    Comments
  *    Display Photo   (Short answer - stores a Google Drive link)
  *    Document        (Short answer - stores a Google Drive link)
+ *    Created Date    (Short answer - IST submission time, e.g. 2026-10-08 21:41:38)
+ *    Player Tournament Age (Short answer - age on TOURNAMENT_AGE_CUTOFF)
  *
  *    Apps Script cannot submit files into Google Form "File upload"
  *    questions, so uploads are saved to a private Drive folder and the
@@ -40,7 +42,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-06-5mb-uploads";
+const DEPLOY_MARKER = "2026-10-08-tournament-age";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -59,6 +61,14 @@ const MAX_COMMENT_LENGTH = 250;
 
 // Must match the website dropdown and the Google Form "T-Shirt Size" choices.
 const TSHIRT_SIZES = ["S", "M", "L", "XL", "XXL"];
+
+// The league is on 6 Dec 2026. "Player Tournament Age" is the age on 5 Jun 2027,
+// which gives every age category a 6-month relaxation.
+// Keep in sync with TOURNAMENT_AGE_CUTOFF in index.html.
+const TOURNAMENT_AGE_CUTOFF = "2027-06-05";
+
+const CREATED_DATE_TIMEZONE = "Asia/Kolkata";
+const CREATED_DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
 // Script property prefix for submission ids that were saved, so a browser
 // retry after a lost response cannot register the same player twice.
@@ -90,7 +100,9 @@ const EXPECTED_TITLES = [
   "T-Shirt Size",
   "Comments",
   "Display Photo",
-  "Document"
+  "Document",
+  "Created Date",
+  "Player Tournament Age"
 ];
 
 /**
@@ -282,6 +294,10 @@ function doPost(e) {
     addText(response, form, "Comments", data.comment, skipped);
     addFileLink(response, form, "Display Photo", data.photo, filePrefix, savedFiles, skipped);
     addFileLink(response, form, "Document", data.document, filePrefix, savedFiles, skipped);
+    addText(response, form, "Created Date",
+      Utilities.formatDate(new Date(), CREATED_DATE_TIMEZONE, CREATED_DATE_FORMAT), skipped);
+    addText(response, form, "Player Tournament Age",
+      formatAgeOn(data.dob, TOURNAMENT_AGE_CUTOFF), skipped);
 
     // Only the final checks and the submit are serialized, so the lock is
     // held for about a second instead of the whole request.
@@ -647,6 +663,43 @@ function trashFiles(files) {
       console.error("Could not trash orphaned upload " + file.getName() + ": " + err);
     }
   });
+}
+
+// Parses YYYY-MM-DD as a UTC date; returns null for malformed or impossible dates.
+function parseIsoDateUtc(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]) - 1;
+  const d = Number(match[3]);
+  const date = new Date(Date.UTC(y, m, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m || date.getUTCDate() !== d) return null;
+  return date;
+}
+
+// Same month/day in another year; Feb 29 falls back to Feb 28 in non-leap years.
+function sameDayInYearUtc(date, year) {
+  const month = date.getUTCMonth();
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay)));
+}
+
+// Age on `onIso` as "X years, Y days" (same format as the website's Age),
+// or "" when the DOB is missing, invalid or after that date.
+function formatAgeOn(dobIso, onIso) {
+  const dob = parseIsoDateUtc(dobIso);
+  const on = parseIsoDateUtc(onIso);
+  if (!dob || !on || dob > on) return "";
+
+  let years = on.getUTCFullYear() - dob.getUTCFullYear();
+  let lastBirthday = sameDayInYearUtc(dob, on.getUTCFullYear());
+  if (lastBirthday > on) {
+    years -= 1;
+    lastBirthday = sameDayInYearUtc(dob, on.getUTCFullYear() - 1);
+  }
+  const days = Math.round((on - lastBirthday) / (24 * 60 * 60 * 1000));
+  return years + (years === 1 ? " year, " : " years, ") +
+         days + (days === 1 ? " day" : " days");
 }
 
 function buildFilePrefix(data) {

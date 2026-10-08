@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, "../apps-script/Code.gs"), "
 
 function createService({
   lockAvailable = true, failSubmit = false, failRecord = false,
-  indexReady = false, existing = [], onLock = null
+  indexReady = false, existing = [], onLock = null, missingTitles = []
 } = {}) {
   const responses = [];
   const properties = indexReady ? { registrationIndexReady: "2026-10-06T00:00:00.000Z" } : {};
@@ -17,7 +17,8 @@ function createService({
   const files = [];
   const events = [];
   const types = { TEXT: "TEXT", PARAGRAPH_TEXT: "PARAGRAPH_TEXT", DATE: "DATE", LIST: "LIST", MULTIPLE_CHOICE: "MULTIPLE_CHOICE" };
-  const titles = ["Name", "Age", "Date of Birth", "Category", "Mobile Number", "Comments", "Display Photo", "Document", "T-Shirt Size"];
+  const titles = ["Name", "Age", "Date of Birth", "Category", "Mobile Number", "Comments", "Display Photo", "Document", "T-Shirt Size", "Created Date", "Player Tournament Age"]
+    .filter((title) => !missingTitles.includes(title));
   const items = titles.map((title) => {
     const type = title === "Date of Birth" ? types.DATE
       : title === "Category" || title === "T-Shirt Size" ? types.LIST : types.TEXT;
@@ -105,7 +106,8 @@ function createService({
       })
     },
     Utilities: {
-      formatDate: () => "20261006-120000",
+      formatDate: (date, timeZone, format) => (format === "yyyy-MM-dd HH:mm:ss" && timeZone === "Asia/Kolkata"
+        ? "2026-10-06 12:00:00" : "20261006-120000"),
       base64Decode: (value) => Buffer.from(value, "base64"),
       newBlob: (bytes) => bytes
     },
@@ -142,6 +144,50 @@ const payload = {
   photo: "data:image/jpeg;base64,dGVzdA==",
   document: "data:application/pdf;base64,dGVzdA=="
 };
+
+const answerFor = (service, title) => {
+  const answer = service.responses[0].getItemResponses()
+    .find((item) => item.getItem().getTitle() === title);
+  return answer ? answer.getResponse() : undefined;
+};
+
+test("Created Date is recorded as the IST submission time", () => {
+  const service = createService();
+  assert.equal(service.post(payload).status, "success");
+  assert.equal(answerFor(service, "Created Date"), "2026-10-06 12:00:00");
+});
+
+test("Player Tournament Age is the age on 5 Jun 2027 calculated from DOB", () => {
+  const cases = [
+    ["1997-06-05", "30 years, 0 days"],
+    ["1997-06-06", "29 years, 364 days"],
+    ["1996-10-06", "30 years, 242 days"],
+    ["1987-01-01", "40 years, 155 days"],
+    ["2000-02-29", "27 years, 97 days"],
+    ["2026-06-05", "1 year, 0 days"],
+    ["2027-06-04", "0 years, 1 day"]
+  ];
+  for (const [dob, expected] of cases) {
+    const service = createService();
+    assert.equal(service.post({ ...payload, dob }).status, "success");
+    assert.equal(answerFor(service, "Player Tournament Age"), expected, dob);
+  }
+
+  for (const dob of ["", "1996-02-30", "06-10-1996", "2027-06-06"]) {
+    const service = createService();
+    assert.equal(service.post({ ...payload, dob }).status, "success");
+    assert.equal(answerFor(service, "Player Tournament Age"), undefined, dob);
+  }
+});
+
+test("missing Created Date / Player Tournament Age questions are reported before any writes", () => {
+  const service = createService({ missingTitles: ["Created Date", "Player Tournament Age"] });
+  const result = service.post(payload);
+  assert.equal(result.status, "error");
+  assert.match(result.message, /missing these question titles: Created Date, Player Tournament Age/);
+  assert.equal(service.files.length, 0);
+  assert.equal(service.responses.length, 0);
+});
 
 test("only exactly ten ASCII digits are accepted before any writes", () => {
   for (const mobile of ["", "123456789", "12345678901", "12345abcde", "+9123456789", "123 456789", 1234567890]) {

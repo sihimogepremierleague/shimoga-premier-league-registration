@@ -11,11 +11,17 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Responsive registration page
 - Supplied SPL logo
 - Custom badminton/Shivamogga background
-- Name, age, DOB, category, mobile, T-shirt size, comments, display photo and document fields
-- Age is auto-calculated from Date of Birth and shown read-only as
-  `X years, Y days`; players must be at least 14 years old (the date picker does
+- Name, DOB, category, mobile, T-shirt size, comments, display photo and document fields
+- Age is auto-calculated from Date of Birth as `X years, Y days` and sent to the
+  Google Form, but is not shown on the page; players must be at least 14 years old (the date picker does
   not offer later dates, and opens on the date exactly 14 years ago instead of
   today) and DOB cannot be more than 70 years ago
+- Once a DOB is entered, the page shows the categories the player is eligible for, based on
+  their age on **5 Jun 2027** (the league is on 6 Dec 2026; this gives every age category a
+  6-month relaxation): G/N Doubles — any age; 30+ Men's Doubles — 30+; 40+ Men's Doubles — 40+;
+  50+ & 35+ Jumble Doubles — 35+. This is information only; the player still picks the category
+- Apps Script also records `Created Date` (submission time in IST, `yyyy-MM-dd HH:mm:ss`) and
+  `Player Tournament Age` (age on 5 Jun 2027 as `X years, Y days`, calculated from DOB on the server)
 - Display photo and document are limited to 5 MB each (checked in the browser
   and again in Apps Script). Large document images (400 KB or more) are resized
   in the browser to at most 2000 px and re-encoded as JPEG before upload; PDFs
@@ -66,6 +72,12 @@ Create a Google Form and add questions with these exact titles:
 7. `Comments` — Long answer
 8. `Display Photo` — Short answer (stores a Google Drive link)
 9. `Document` — Short answer (stores a Google Drive link)
+10. `Created Date` — Short answer (receives the IST submission time such as `2026-10-08 21:41:38`)
+11. `Player Tournament Age` — Short answer (receives text such as `34 years, 120 days`; age on 5 Jun 2027)
+
+> `Created Date` and `Player Tournament Age` are filled in by Apps Script. Add them
+> to the form **before** deploying the updated script, otherwise registrations
+> fail with "Google Form is missing these question titles".
 
 > Do **not** use the "File upload" question type. Apps Script cannot submit
 > files into File upload questions. The script saves the uploaded photo and ID
@@ -156,7 +168,7 @@ Open the Web app `/exec` URL directly in a browser. It returns a fast liveness
 check that does not touch the Form or Drive:
 
 ```json
-{ "status": "ok", "deployedVersion": "2026-10-06-5mb-uploads" }
+{ "status": "ok", "deployedVersion": "2026-10-08-tournament-age" }
 ```
 
 For the full configuration check, open `/exec?diagnostics=1`, for example:
@@ -164,7 +176,7 @@ For the full configuration check, open `/exec?diagnostics=1`, for example:
 ```json
 {
   "status": "ok",
-  "deployedVersion": "2026-10-06-5mb-uploads",
+  "deployedVersion": "2026-10-08-tournament-age",
   "timingsMs": { "openForm": 400, "readItems": 300, "readResponses": 900, "duplicateScan": 1200, "checkDrive": 500, "total": 3300 },
   "formTitle": "SPL Registration",
   "items": [{ "title": "Name", "type": "TEXT" }],
