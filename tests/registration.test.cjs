@@ -7,7 +7,7 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "../apps-script/Code.gs"), "utf8");
 
-const CATEGORIES = ["G/N Doubles", "30+ Men's Doubles", "40+ Men's Doubles", "50+ & 35+ Jumble Doubles"];
+const CATEGORIES = ["G/N Doubles", "30+ Men's Doubles", "40+ Men's Doubles", "50+ Jumbled", "35+ Jumbled"];
 const TSHIRT_SIZES = ["S", "M", "L", "XL", "XXL"];
 const PUBLISHED_URL = "https://docs.google.com/forms/d/e/pub-id/viewform";
 
@@ -16,7 +16,7 @@ function createService({
   lockAvailable = true, failSubmit = false, failRecord = false,
   indexReady = false, existing = [], onLock = null, missingTitles = [],
   collectsEmail = false, formResponseStatus = 200, formResponseSaves = null, fetchThrows = false,
-  extraItems = []
+  extraItems = [], categoryChoices = CATEGORIES
 } = {}) {
   const responses = [];
   const properties = indexReady ? { registrationIndexReady: "2026-10-06T00:00:00.000Z" } : {};
@@ -38,7 +38,7 @@ function createService({
     .map(({ title, index, type: extraType, required }) => {
     const type = extraType || (title === "Date of Birth" ? types.DATE
       : title === "Category" || title === "T-Shirt Size" ? types.LIST : types.TEXT);
-    const choices = title === "Category" ? CATEGORIES : title === "T-Shirt Size" ? TSHIRT_SIZES : [];
+    const choices = title === "Category" ? categoryChoices : title === "T-Shirt Size" ? TSHIRT_SIZES : [];
     const item = {
       entryId: String(1000 + index),
       getTitle: () => title,
@@ -780,6 +780,51 @@ test("fast submit rejects a category that is not a Form option before any writes
   assert.equal(result.status, "error");
   assert.match(result.message, /category/);
   assert.deepEqual(service.events, []);
+});
+
+test("both Jumbled categories are saved to the Google Form on the fast and FormApp paths", () => {
+  for (const category of ["50+ Jumbled", "35+ Jumbled"]) {
+    const fast = fastService();
+    const fastResult = fast.post({ ...payload, category });
+    assert.equal(fastResult.route, "formResponse", category);
+    assert.equal(fast.fetches[0].fields["entry.1003"], category);
+
+    const slow = createService({ indexReady: true });
+    assert.equal(slow.post({ ...payload, category }).status, "success", category);
+    assert.equal(answerFor(slow, "Category"), category);
+  }
+  assert.equal(createService().post({ ...payload, category: "50+ & 35+ Jumble Doubles" }).status, "error");
+});
+
+test("a Form without the new Category choices is reported before any writes", () => {
+  const oldChoices = ["G/N Doubles", "30+ Men's Doubles", "40+ Men's Doubles", "50+ & 35+ Jumble Doubles"];
+  const service = createService({ indexReady: true, categoryChoices: oldChoices });
+  service.get({ warm: "1" });
+  assert.match(JSON.parse(service.properties.formMap).reason, /Category.*50\+ Jumbled, 35\+ Jumbled/);
+
+  service.events.length = 0;
+  const result = service.post({ ...payload, category: "35+ Jumbled" });
+  assert.equal(result.status, "error");
+  assert.match(result.message, /Add these choices to the Google Form "Category" question: 50\+ Jumbled, 35\+ Jumbled/);
+  assert.equal(service.files.length, 0);
+  assert.equal(service.responses.length, 0);
+
+  const diagnostics = service.get({ diagnostics: "1" });
+  assert.equal(diagnostics.status, "error");
+  assert.deepEqual(diagnostics.missingCategoryChoices, ["50+ Jumbled", "35+ Jumbled"]);
+});
+
+test("a cached Form map with old Category choices is refreshed instead of rejecting the player", () => {
+  const service = fastService();
+  const map = JSON.parse(service.properties.formMap);
+  map.entries.Category.choices = ["G/N Doubles", "50+ & 35+ Jumble Doubles"];
+  service.properties.formMap = JSON.stringify(map);
+
+  const result = service.post({ ...payload, category: "50+ Jumbled" });
+  assert.equal(result.status, "success");
+  assert.equal(result.route, "formResponse");
+  assert.equal(service.fetches[0].fields["entry.1003"], "50+ Jumbled");
+  assert.deepEqual(JSON.parse(service.properties.formMap).entries.Category.choices, CATEGORIES);
 });
 
 test("an unknown /formResponse outcome is confirmed against the Form before resubmitting", () => {

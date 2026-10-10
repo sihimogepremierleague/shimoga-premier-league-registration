@@ -105,7 +105,8 @@
                 <option>G/N Doubles</option>
                 <option>30+ Men's Doubles</option>
                 <option>40+ Men's Doubles</option>
-                <option>50+ &amp; 35+ Jumble Doubles</option>
+                <option>35+ Jumbled</option>
+                <option>50+ Jumbled</option>
               </select>
             </label>
           </div>
@@ -258,12 +259,14 @@
     // Keep in sync with TOURNAMENT_AGE_CUTOFF in apps-script/Code.gs.
     const TOURNAMENT_AGE_CUTOFF = new Date(2027, 5, 5);
     const TOURNAMENT_AGE_CUTOFF_LABEL = "5 Jun 2027";
-    // Minimum tournament age per category; values must match the Category options.
+    // Minimum tournament age per category; keys must match the Category options
+    // and CATEGORIES in apps-script/Code.gs (which must match the Google Form).
     const CATEGORY_MIN_AGES = {
       "G/N Doubles": 0,
       "30+ Men's Doubles": 30,
       "40+ Men's Doubles": 40,
-      "50+ & 35+ Jumble Doubles": 35
+      "50+ Jumbled": 50,
+      "35+ Jumbled": 35
     };
 
     const form = document.getElementById("registrationForm");

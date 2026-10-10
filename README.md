@@ -19,7 +19,7 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Once a DOB is entered, the page shows the categories the player is eligible for, based on
   their age on **5 Jun 2027** (the league is on 6 Dec 2026; this gives every age category a
   6-month relaxation): G/N Doubles — any age; 30+ Men's Doubles — 30+; 40+ Men's Doubles — 40+;
-  50+ & 35+ Jumble Doubles — 35+. This is information only; the player still picks the category
+  50+ Jumbled — 50+; 35+ Jumbled — 35+. This is information only; the player still picks the category
 - Apps Script also records `Created Date` (submission time in IST, `yyyy-MM-dd HH:mm:ss`) and
   `Player Tournament Age` (age on 5 Jun 2027 as `X years, Y days`, calculated from DOB on the server)
 - Display photo and document are limited to 5 MB each (checked in the browser
@@ -36,7 +36,7 @@ The page is intentionally designed as a tournament registration page, not as an 
   with a face guide, shutter and front/back switch, and fall back to the file
   picker when no camera API is available. Camera shots go through the same cropper,
   so full-resolution phone photos (up to 25 MB) are accepted before cropping
-- T-shirt size (S, M, L, XL, XXL) is mandatory and validated in the browser and Apps Script
+- T-shirt size (S, M, L, XL, XXL) and category are mandatory and validated in the browser and Apps Script
 - Mobile-friendly photo cropper: drag to move, pinch / slider to zoom, rotate;
   the cropped photo is saved as a square JPEG of at most 800×800 px
 - Client-side validation
@@ -92,7 +92,16 @@ For Category, add:
 - G/N Doubles
 - 30+ Men's Doubles
 - 40+ Men's Doubles
-- 50+ & 35+ Jumble Doubles
+- 50+ Jumbled
+- 35+ Jumbled
+
+The choices must match exactly (spelling, spaces, `+`). Apps Script rejects any other
+category and, if the Form is missing one of these choices, reports
+`Add these choices to the Google Form "Category" question: ...` instead of saving.
+To change categories later, update the Category `<option>`s and `CATEGORY_MIN_AGES` in
+`index.html`, `CATEGORIES` in `apps-script/Code.gs`, and the Form's Category choices,
+then redeploy the script and run `refreshFormMap`. Existing responses keep the category
+text they were submitted with.
 
 Link the Google Form to a Google Sheet if you want responses in a spreadsheet.
 
@@ -223,6 +232,8 @@ Check that:
 - `wrongTypeTitles` is empty. Anything listed there (normally `Display Photo`
   or `Document`) is still a File upload question and must be changed to Short
   answer.
+- `missingCategoryChoices` is empty. Anything listed there must be added as a
+  choice to the Form's `Category` question, spelled exactly as in `CATEGORIES`.
 - `driveAuthorized` is `true`. If it is `false`, submissions fail with
   "You do not have permission to call DriveApp...". Run `setupUploadFolder` in
   the Apps Script editor and accept the Drive permission prompt.

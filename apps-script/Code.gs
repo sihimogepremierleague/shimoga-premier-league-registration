@@ -7,7 +7,7 @@
  *    Name
  *    Age
  *    Date of Birth
- *    Category
+ *    Category        (Dropdown or Multiple choice: every value in CATEGORIES)
  *    Mobile Number
  *    T-Shirt Size    (Dropdown or Multiple choice: S, M, L, XL, XXL)
  *    Comments
@@ -45,7 +45,7 @@ const GOOGLE_FORM_ID = "1Or1-sY_4m10QPwC5O5XQKNxPBEoo98YF1ncsbHixeRk";
 
 // Bump this when you edit the script, then redeploy a NEW version.
 // Opening the /exec URL in a browser must echo the same value back.
-const DEPLOY_MARKER = "2026-10-08-direct-submit";
+const DEPLOY_MARKER = "2026-10-10-jumbled-categories";
 
 // Uploaded files are stored in this Drive folder, owned by the script owner
 // and private by default. Set UPLOAD_FOLDER_ID to use an existing folder;
@@ -64,6 +64,16 @@ const MAX_COMMENT_LENGTH = 250;
 
 // Must match the website dropdown and the Google Form "T-Shirt Size" choices.
 const TSHIRT_SIZES = ["S", "M", "L", "XL", "XXL"];
+
+// Must match the website dropdown and the Google Form "Category" choices
+// (spelling, spacing and punctuation exactly).
+const CATEGORIES = [
+  "G/N Doubles",
+  "30+ Men's Doubles",
+  "40+ Men's Doubles",
+  "50+ Jumbled",
+  "35+ Jumbled"
+];
 
 // The league is on 6 Dec 2026. "Player Tournament Age" is the age on 5 Jun 2027,
 // which gives every age category a 6-month relaxation.
@@ -193,6 +203,7 @@ function doGet(e) {
     diagnostics.items = items;
     diagnostics.missingTitles = findMissingTitles(form);
     diagnostics.wrongTypeTitles = findWrongTypeFileLinkTitles(form);
+    diagnostics.missingCategoryChoices = findMissingCategoryChoices(form);
     diagnostics.acceptsResponses = form.isAcceptingResponses();
 
     t = Date.now();
@@ -205,7 +216,8 @@ function doGet(e) {
       timingsMs.duplicateScan = Date.now() - t;
     }
 
-    if (diagnostics.missingTitles.length || diagnostics.wrongTypeTitles.length) {
+    if (diagnostics.missingTitles.length || diagnostics.wrongTypeTitles.length ||
+        diagnostics.missingCategoryChoices.length) {
       diagnostics.status = "error";
     }
   } catch (err) {
@@ -305,12 +317,19 @@ function handleRegistration(data) {
       return jsonResponse({ status: "success", alreadyRecorded: true });
     }
 
-    const formMap = getUsableFormMap(snapshot[FORM_MAP_KEY]);
+    let formMap = getUsableFormMap(snapshot[FORM_MAP_KEY]);
     let form = null;
     const openForm = function () {
       if (!form) form = FormApp.openById(GOOGLE_FORM_ID);
       return form;
     };
+
+    // The cached map can predate an edit to the Form's Category choices;
+    // re-read the Form once instead of rejecting a valid category.
+    if (formMap && !mapHasChoice(formMap, "Category", data.category)) {
+      formMap = getUsableFormMap(JSON.stringify(refreshFormMap()));
+      timings.mark("refreshFormMap");
+    }
 
     if (formMap) {
       validateChoiceAnswers(formMap, data);
@@ -435,6 +454,9 @@ function validateRegistration(data) {
   if (typeof data.mobile !== "string" || !/^[0-9]{10}$/.test(data.mobile)) {
     throw new Error("Please enter exactly 10 digits for your mobile number.");
   }
+  if (CATEGORIES.indexOf(data.category) === -1) {
+    throw new Error("Please select your category.");
+  }
   if (TSHIRT_SIZES.indexOf(data.tshirtSize) === -1) {
     throw new Error("Please select your T-shirt size.");
   }
@@ -463,14 +485,34 @@ function validateFormForFormApp(form) {
       wrongType.join(", ")
     );
   }
+  const missingCategories = findMissingCategoryChoices(form);
+  if (missingCategories.length) throw new Error(missingCategoryMessage(missingCategories));
 }
 
 // A value outside the Form's options would make the fast submit fail anyway.
 function validateChoiceAnswers(formMap, data) {
-  const category = formMap.entries.Category;
-  if (category && category.choices && category.choices.indexOf(data.category) === -1) {
+  if (!mapHasChoice(formMap, "Category", data.category)) {
     throw new Error("Please select your category.");
   }
+}
+
+function mapHasChoice(formMap, title, value) {
+  const entry = formMap.entries[title];
+  return !entry || !entry.choices || entry.choices.indexOf(value) !== -1;
+}
+
+// CATEGORIES that the Form's "Category" question does not offer as a choice.
+function findMissingCategoryChoices(form) {
+  const item = findItem(form, "Category", FormApp.ItemType.LIST) ||
+               findItem(form, "Category", FormApp.ItemType.MULTIPLE_CHOICE);
+  if (!item) return [];
+  const choiceItem = item.getType() === FormApp.ItemType.LIST ? item.asListItem() : item.asMultipleChoiceItem();
+  const choices = choiceItem.getChoices().map(function (choice) { return choice.getValue(); });
+  return CATEGORIES.filter(function (category) { return choices.indexOf(category) === -1; });
+}
+
+function missingCategoryMessage(missing) {
+  return "Add these choices to the Google Form \"Category\" question: " + missing.join(", ");
 }
 
 function createTimings() {
@@ -794,6 +836,8 @@ function buildFormMap(form) {
     const missing = findMissingTitles(form);
     if (missing.length) throw new Error("missing question titles: " + missing.join(", "));
     if (findWrongTypeFileLinkTitles(form).length) throw new Error("file link questions must be Short answer");
+    const missingCategories = findMissingCategoryChoices(form);
+    if (missingCategories.length) throw new Error(missingCategoryMessage(missingCategories));
     if (form.collectsEmail()) throw new Error("the form collects email addresses");
     if (!form.isAcceptingResponses()) throw new Error("the form is not accepting responses");
     try {
