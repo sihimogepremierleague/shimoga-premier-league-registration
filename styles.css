@@ -854,6 +854,46 @@ body.modal-open {
   font-size: 16px;
 }
 
+.contact-box {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--cream);
+  text-align: center;
+}
+
+.contact-title {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.contact-links {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.contact-link {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.contact-link:hover,
+.contact-link:focus-visible {
+  background: var(--ink);
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
 .footer-note {
   display: flex;
   justify-content: center;

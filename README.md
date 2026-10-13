@@ -13,8 +13,8 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Custom badminton/Shivamogga background
 - Name, DOB, category, mobile, T-shirt size, comments, display photo and document fields
 - Age is auto-calculated from Date of Birth as `X years, Y days` and sent to the
-  Google Form, but is not shown on the page; players must be at least 14 years old (the date picker does
-  not offer later dates, and opens on the date exactly 14 years ago instead of
+  Google Form, but is not shown on the page; players must be at least 10 years old (the date picker does
+  not offer later dates, and opens on the date exactly 10 years ago instead of
   today) and DOB cannot be more than 70 years ago
 - Once a DOB is entered, the page shows the categories the player is eligible for, based on
   their age on **5 Jun 2027** (the league is on 6 Dec 2026; this gives every age category a
