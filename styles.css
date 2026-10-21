@@ -144,6 +144,31 @@ h1,
   letter-spacing: -.01em;
 }
 
+.eligibility-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -8px 0 22px;
+  padding: 12px 16px;
+  border: 1px solid #f0d27a;
+  border-left: 4px solid var(--gold);
+  border-radius: 13px;
+  background: #fff6d6;
+  color: var(--green);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.eligibility-notice p { margin: 0; }
+
+.eligibility-notice strong { font-weight: 800; }
+
+.eligibility-notice-icon {
+  flex: none;
+  font-size: 20px;
+}
+
 .char-count {
   text-align: right;
 }

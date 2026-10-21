@@ -43,6 +43,11 @@
         </div>
       </dl>
 
+      <div class="eligibility-notice" role="note">
+        <span class="eligibility-notice-icon" aria-hidden="true">📍</span>
+        <p>Registration is open <strong>only for players from Shivamogga and Chikkamagaluru</strong>.</p>
+      </div>
+
       <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
       <form id="registrationForm" method="POST"
@@ -502,8 +507,21 @@
              age.days + (age.days === 1 ? " day" : " days");
     }
 
+    // Disables categories the player is not old enough for. Age-restricted
+    // categories stay disabled until a valid DOB is entered (tournamentAge null).
+    function updateCategoryOptions(tournamentAge) {
+      const select = form.elements.category;
+      Array.from(select.options).forEach((option) => {
+        const minAge = CATEGORY_MIN_AGES[option.value];
+        if (minAge === undefined) return;
+        option.disabled = minAge > 0 && (!tournamentAge || tournamentAge.years < minAge);
+      });
+      if (select.selectedOptions[0] && select.selectedOptions[0].disabled) select.value = "";
+    }
+
     // Pass null to show the prompt shown before a valid DOB is entered.
     function renderEligibility(tournamentAge) {
+      updateCategoryOptions(tournamentAge);
       eligibilityList.replaceChildren();
       if (!tournamentAge) {
         eligibilityList.hidden = true;
@@ -570,6 +588,7 @@
     }
 
     applyDobBounds();
+    renderEligibility(null);
     dobInput.addEventListener("focus", presetDobIfEmpty);
     dobInput.addEventListener("pointerdown", presetDobIfEmpty);
     dobInput.addEventListener("input", () => updateAgeFromDob(false));

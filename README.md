@@ -19,7 +19,9 @@ The page is intentionally designed as a tournament registration page, not as an 
 - Once a DOB is entered, the page shows the categories the player is eligible for, based on
   their age on **5 Jun 2027** (the league is on 6 Dec 2026; this gives every age category a
   6-month relaxation): G/N Doubles — any age; 30+ Men's Doubles — 30+; 40+ Men's Doubles — 40+;
-  50+ Jumbled — 50+; 35+ Jumbled — 35+. This is information only; the player still picks the category
+  50+ Jumbled — 50+; 35+ Jumbled — 35+. Categories the player is not eligible for are disabled in
+  the Category dropdown (age-restricted ones stay disabled until a valid DOB is entered), and a
+  selected category is cleared if a DOB change makes it ineligible
 - Apps Script also records `Created Date` (submission time in IST, `yyyy-MM-dd HH:mm:ss`) and
   `Player Tournament Age` (age on 5 Jun 2027 as `X years, Y days`, calculated from DOB on the server)
 - Display photo and document are limited to 5 MB each (checked in the browser
